@@ -1,0 +1,6 @@
+node_modules/
+.env
+dist/
+build/
+backend/novels/
+.DS_Store
