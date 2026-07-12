@@ -48,12 +48,12 @@ app.get('/api/projects', async (req, res) => {
 });
 
 app.post('/api/projects', async (req, res) => {
-  const { id, name, folderPath, templates } = req.body;
+  const { id, name, folderPath, templates, writingPOV, writingTense } = req.body;
   if (!id || !name || !folderPath) return res.status(400).json({ error: 'Missing fields' });
   
   const projects = await readDB('projects.json');
   const index = projects.findIndex(p => p.id === id);
-  const newProject = { id, name, folderPath, templates: templates || [] };
+  const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '' };
   
   if (index >= 0) projects[index] = newProject;
   else projects.push(newProject);
@@ -102,15 +102,17 @@ const util = require('util');
 const execAsync = util.promisify(exec);
 
 app.post('/api/ai/chat', async (req, res) => {
-  const { message, templateId } = req.body;
+  const { message, templateIds } = req.body;
   if (!message) return res.status(400).json({ error: 'Missing message' });
 
-  // Get template content if provided
+  // Get templates content if provided
   let contextStr = '';
-  if (templateId) {
+  if (templateIds && Array.isArray(templateIds) && templateIds.length > 0) {
     const templates = await readDB('templates.json');
-    const tmpl = templates.find(t => t.id === templateId);
-    if (tmpl) contextStr = `\nContext Template:\n${tmpl.content}`;
+    const selectedTmpls = templates.filter(t => templateIds.includes(t.id));
+    if (selectedTmpls.length > 0) {
+      contextStr = '\nContext Templates:\n' + selectedTmpls.map(t => `--- ${t.name} ---\n${t.content}`).join('\n\n');
+    }
   }
 
   // Escape message securely for shell
