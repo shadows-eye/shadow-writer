@@ -340,16 +340,15 @@ app.post('/api/ai/chat', async (req, res) => {
   const safeContext = contextStr.replace(/"/g, '\\"').replace(/\$/g, '\\$');
 
   try {
-    // Attempt to call antigravity cli
-    // Note: Since it's not installed yet, this will fail gracefully and we return the error.
-    const { stdout, stderr } = await execAsync(`antigravity chat --message "${safeMessage}" --context "${safeContext}"`);
+    // Attempt to call agy cli
+    const { stdout, stderr } = await execAsync(`agy chat --message "${safeMessage}" --context "${safeContext}"`);
     res.json({ reply: stdout.trim() || 'No response' });
   } catch (error) {
     console.error('Antigravity CLI error:', error.message);
     if (error.message.includes('command not found') || error.code === 127) {
-      res.json({ reply: 'Antigravity CLI not installed yet. Waiting for installation to process AI chat.' });
+      res.json({ reply: 'Antigravity CLI (agy) not installed or mounted yet. Waiting for installation to process AI chat.' });
     } else {
-      res.status(500).json({ error: 'Failed to process AI chat via antigravity cli' });
+      res.status(500).json({ error: 'Failed to process AI chat via agy cli' });
     }
   }
 });
