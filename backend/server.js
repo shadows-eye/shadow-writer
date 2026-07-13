@@ -265,7 +265,7 @@ app.get('/api/templates', async (req, res) => {
 app.post('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const userRole = req.headers['x-user-role'] || 'creator';
-  const { id, name, genre, templateType, content } = req.body;
+  const { id, name, genre, templateType, content, templateBehavior, nextTemplateId } = req.body;
   if (!id || !name || !genre || !templateType) return res.status(400).json({ error: 'Missing fields' });
   
   const templates = await readDB('templates.json');
@@ -284,10 +284,12 @@ app.post('/api/templates', async (req, res) => {
       templates[index].genre = genre;
       templates[index].templateType = templateType;
       templates[index].content = content;
+      templates[index].templateBehavior = templateBehavior;
+      templates[index].nextTemplateId = nextTemplateId;
     }
   } else {
     // New template
-    templates.push({ id, name, genre, templateType, content: isOverride ? '' : content, overrides: isOverride && userId ? { [userId]: content } : {} });
+    templates.push({ id, name, genre, templateType, templateBehavior, nextTemplateId, content: isOverride ? '' : content, overrides: isOverride && userId ? { [userId]: content } : {} });
   }
   
   await writeDB('templates.json', templates);
