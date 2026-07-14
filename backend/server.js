@@ -1,43 +1,28 @@
 const express = require('express');
 const cors = require('cors');
-const simpleGit = require('simple-git');
 const path = require('path');
-const fs = require('fs/promises');
-const fsSync = require('fs');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
-const NOVELS_DIR = process.env.NOVELS_DIR || path.join(__dirname, 'novels');
-const DB_DIR = path.join(__dirname, 'db');
 
-// Ensure DB and Novel dirs exist
-if (!fsSync.existsSync(NOVELS_DIR)) fsSync.mkdirSync(NOVELS_DIR, { recursive: true });
-if (!fsSync.existsSync(DB_DIR)) fsSync.mkdirSync(DB_DIR, { recursive: true });
-
-// Helper to read/write JSON DBs
-async function readDB(filename) {
-  const filepath = path.join(DB_DIR, filename);
-  if (!fsSync.existsSync(filepath)) return [];
-  try {
-    const data = await fs.readFile(filepath, 'utf-8');
-    return JSON.parse(data);
-  } catch (e) { return []; }
-}
-async function writeDB(filename, data) {
-  await fs.writeFile(path.join(DB_DIR, filename), JSON.stringify(data, null, 2));
-}
-
-function findProject(projects, projectId) {
-  if (!projects || projects.length === 0) return null;
-  let p = projects.find(proj => proj.id === projectId);
-  if (!p && projects.length === 1) {
-    p = projects[0];
-  }
-  return p;
-}
+// Import all models and DB helpers from mongoDB.js
+const {
+  readDB,
+  writeDB,
+  findProject,
+  Project,
+  Template,
+  CharacterElement,
+  History,
+  Chapter,
+  Character,
+  Note,
+  ContextFile,
+  parseCharacterAttributes
+} = require('./mongoDB');
 
 const { exec } = require('child_process');
 const util = require('util');
@@ -48,11 +33,17 @@ const jobs = new Map(); // jobId -> Response stream (for SSE)
 module.exports = {
   readDB,
   writeDB,
-  NOVELS_DIR,
-  DB_DIR,
-  execAsync,
   jobs,
-  findProject
+  findProject,
+  execAsync,
+  Project,
+  Template,
+  CharacterElement,
+  History,
+  Chapter,
+  Character,
+  Note,
+  ContextFile
 };
 
 // API Key Middleware
@@ -76,44 +67,41 @@ app.get('/api/project-status', async (req, res) => {
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const projectDir = project.folderPath;
-  const status = {
-    hasDossier: false,
-    hasCharacters: false,
-    hasOutline: false,
-    chapters: []
-  };
-
   try {
-    // Check for Story Dossier (Dossier.md) or assume true for now if any notes exist?
-    // Let's check for specific files or just anything in notes?
-    // Actually, we'll just check if Dossier.md exists.
-    status.hasDossier = fsSync.existsSync(path.join(projectDir, 'Dossier.md')) || fsSync.existsSync(path.join(projectDir, 'Story Dossier.md'));
+    const dossierNote = await Note.findOne({ projectId: project.id, id: { $in: ['dossier', 'story_dossier'] } });
+    const dossierFile = await ContextFile.findOne({ projectId: project.id, destination: 'worldbuilding', path: /dossier/i });
+    const hasDossier = !!dossierNote || !!dossierFile;
 
-    // Check for characters
-    const charsDir = path.join(projectDir, 'characters');
-    if (fsSync.existsSync(charsDir)) {
-      const charFiles = await fs.readdir(charsDir);
-      status.hasCharacters = charFiles.length > 0;
-    }
+    const hasCharacters = await Character.exists({ projectId: project.id });
+    
+    const outlineNote = await Note.findOne({ projectId: project.id, id: 'outline' });
+    const outlineFile = await ContextFile.findOne({ projectId: project.id, destination: 'worldbuilding', path: /outline/i });
+    const hasOutline = !!outlineNote || !!outlineFile;
 
-    // Check for Outline and parse chapters
-    const outlinePath = path.join(projectDir, 'Outline.md');
-    if (fsSync.existsSync(outlinePath)) {
-      status.hasOutline = true;
-      const outlineContent = await fs.readFile(outlinePath, 'utf-8');
-
-      // Parse chapter headings, e.g., "### Chapter 1: The Seed of Doubt"
+    let chapters = [];
+    if (hasOutline) {
+      const outlineContent = (outlineNote ? outlineNote.content : (outlineFile ? outlineFile.content : '')) || '';
       const chapterRegex = /^\s*#+\s*Chapter\s+(\d+)/gm;
       let match;
       const chaptersSet = new Set();
       while ((match = chapterRegex.exec(outlineContent)) !== null) {
         chaptersSet.add(parseInt(match[1]));
       }
-      status.chapters = Array.from(chaptersSet).sort((a, b) => a - b);
+      chapters = Array.from(chaptersSet).sort((a, b) => a - b);
+    } else {
+      const chaps = await Chapter.find({ projectId: project.id });
+      chapters = chaps.map(c => {
+         const num = parseInt(c.id.replace(/\D/g, ''));
+         return isNaN(num) ? c.id : num;
+      }).sort((a, b) => a - b);
     }
 
-    res.json(status);
+    res.json({
+      hasDossier: !!hasDossier,
+      hasCharacters: !!hasCharacters,
+      hasOutline: !!hasOutline,
+      chapters
+    });
   } catch (error) {
     console.error('Error in /api/project-status:', error);
     res.status(500).json({ error: 'Failed to check project status' });
@@ -128,21 +116,107 @@ app.post('/api/projects', async (req, res) => {
   const { id, name, folderPath, templates, writingPOV, writingTense } = req.body;
   if (!id || !name || !folderPath) return res.status(400).json({ error: 'Missing fields' });
 
+  try {
+    const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '' };
+    await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
+    res.json({ success: true, project: newProject });
+  } catch (error) {
+    console.error('Error saving project:', error);
+    res.status(500).json({ error: 'Failed to save project' });
+  }
+});
+
+app.get('/api/projects/:projectId/export', async (req, res) => {
+  const { projectId } = req.params;
   const projects = await readDB('projects.json');
-  const index = projects.findIndex(p => p.id === id);
-  const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '' };
+  const project = findProject(projects, projectId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  if (index >= 0) projects[index] = newProject;
-  else projects.push(newProject);
+  try {
+    const chapters = await Chapter.find({ projectId: project.id }).sort({ orderIndex: 1 });
+    if (!chapters || chapters.length === 0) {
+      return res.status(404).json({ error: 'No chapters found to export' });
+    }
 
-  await writeDB('projects.json', projects);
+    const docx = require('docx');
+    const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
 
-  // Ensure the folder exists and git is initialized
-  if (!fsSync.existsSync(folderPath)) await fs.mkdir(folderPath, { recursive: true });
-  const git = simpleGit(folderPath);
-  if (!(await git.checkIsRepo())) await git.init();
+    const docChildren = [];
+    for (const chap of chapters) {
+      const titleText = chap.id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      docChildren.push(new Paragraph({
+        text: titleText,
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 200 }
+      }));
 
-  res.json({ success: true, project: newProject });
+      const lines = (chap.content || '').split(/\n\n+/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('# ')) {
+          docChildren.push(new Paragraph({
+            text: trimmed.substring(2),
+            heading: HeadingLevel.HEADING_1,
+            spacing: { before: 300, after: 200 }
+          }));
+        } else if (trimmed.startsWith('## ')) {
+          docChildren.push(new Paragraph({
+            text: trimmed.substring(3),
+            heading: HeadingLevel.HEADING_2,
+            spacing: { before: 200, after: 150 }
+          }));
+        } else if (trimmed.startsWith('### ')) {
+          docChildren.push(new Paragraph({
+            text: trimmed.substring(4),
+            heading: HeadingLevel.HEADING_3,
+            spacing: { before: 150, after: 100 }
+          }));
+        } else {
+          const runs = [];
+          const tokens = trimmed.split(/(\*\*.*?\*\*|\*.*?\*)/g);
+          for (const token of tokens) {
+            if (token.startsWith('**') && token.endsWith('**')) {
+              runs.push(new TextRun({
+                text: token.substring(2, token.length - 2),
+                bold: true
+              }));
+            } else if (token.startsWith('*') && token.endsWith('*')) {
+              runs.push(new TextRun({
+                text: token.substring(1, token.length - 1),
+                italic: true
+              }));
+            } else if (token) {
+              runs.push(new TextRun({
+                text: token
+              }));
+            }
+          }
+
+          docChildren.push(new Paragraph({
+            children: runs,
+            spacing: { after: 120 }
+          }));
+        }
+      }
+    }
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: docChildren
+      }]
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_manuscript.docx"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error('Error exporting DOCX:', err);
+    res.status(500).json({ error: 'Failed to compile and export manuscript' });
+  }
 });
 
 app.post('/api/context-files', async (req, res) => {
@@ -155,22 +229,13 @@ app.post('/api/context-files', async (req, res) => {
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  // destination should be 'braindump' or 'worldbuilding'
-  const targetDir = path.join(project.folderPath, destination);
-
   try {
     for (const file of files) {
-      // file.path is relative path from the uploaded folder (e.g., 'my_folder/sub/file.md')
-      // file.content is text
-      const filePath = path.join(targetDir, file.path);
-      // Ensure path is safe and inside targetDir
-      if (!filePath.startsWith(targetDir)) continue;
-
-      const dirPath = path.dirname(filePath);
-      if (!fsSync.existsSync(dirPath)) {
-        await fs.mkdir(dirPath, { recursive: true });
-      }
-      await fs.writeFile(filePath, file.content, 'utf8');
+      await ContextFile.findOneAndUpdate(
+        { projectId: project.id, destination, path: file.path },
+        { content: file.content, lastEdited: new Date() },
+        { upsert: true }
+      );
     }
     res.json({ success: true, count: files.length });
   } catch (error) {
@@ -178,25 +243,6 @@ app.post('/api/context-files', async (req, res) => {
     res.status(500).json({ error: 'Failed to save context files' });
   }
 });
-
-async function getFilesRecursively(dir) {
-  let results = [];
-  try {
-    const list = await fs.readdir(dir);
-    for (const file of list) {
-      const filePath = path.join(dir, file);
-      const stat = await fs.stat(filePath);
-      if (stat && stat.isDirectory()) {
-        results = results.concat(await getFilesRecursively(filePath));
-      } else if (filePath.endsWith('.md')) {
-        results.push(filePath);
-      }
-    }
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-  }
-  return results;
-}
 
 app.get('/api/context-files', async (req, res) => {
   const { projectId, destination } = req.query;
@@ -206,17 +252,13 @@ app.get('/api/context-files', async (req, res) => {
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const targetDir = path.join(project.folderPath, destination);
   try {
-    const filePaths = await getFilesRecursively(targetDir);
-    const files = await Promise.all(filePaths.map(async (fp) => {
-      const content = await fs.readFile(fp, 'utf-8');
-      return {
-        path: path.relative(targetDir, fp).replace(/\\/g, '/'),
-        content
-      };
+    const files = await ContextFile.find({ projectId: project.id, destination });
+    const formatted = files.map(f => ({
+      path: f.path,
+      content: f.content
     }));
-    res.json({ success: true, files });
+    res.json({ success: true, files: formatted });
   } catch (e) {
     console.error('Error reading context files:', e);
     res.status(500).json({ error: 'Failed to read context files' });
@@ -233,12 +275,12 @@ app.put('/api/context-files', async (req, res) => {
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const targetDir = path.join(project.folderPath, destination);
-  const filePath = path.join(targetDir, relPath);
-  if (!filePath.startsWith(targetDir)) return res.status(403).json({ error: 'Invalid path' });
-
   try {
-    await fs.writeFile(filePath, content, 'utf8');
+    await ContextFile.findOneAndUpdate(
+      { projectId: project.id, destination, path: relPath },
+      { content, lastEdited: new Date() },
+      { upsert: true }
+    );
     res.json({ success: true });
   } catch (error) {
     console.error('Error updating context file:', error);
@@ -254,12 +296,8 @@ app.delete('/api/context-files', async (req, res) => {
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const targetDir = path.join(project.folderPath, destination);
-  const filePath = path.join(targetDir, relPath);
-  if (!filePath.startsWith(targetDir)) return res.status(403).json({ error: 'Invalid path' });
-
   try {
-    await fs.unlink(filePath);
+    await ContextFile.deleteOne({ projectId: project.id, destination, path: relPath });
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting context file:', error);
@@ -269,20 +307,19 @@ app.delete('/api/context-files', async (req, res) => {
 
 // --- TEMPLATES API ---
 app.get('/api/templates', async (req, res) => {
-  const userId = req.headers['x-user-id']; // Optional, could be admin
+  const userId = req.headers['x-user-id'];
   const templates = await readDB('templates.json');
 
-  // Apply overrides if a specific creator is fetching
   if (userId) {
     const customizedTemplates = templates.map(t => {
-      if (t.overrides && t.overrides[userId]) {
-        return { ...t, content: t.overrides[userId], isOverride: true };
+      if (t.overrides && (t.overrides[userId] || (t.overrides instanceof Map && t.overrides.get(userId)))) {
+        const val = t.overrides instanceof Map ? t.overrides.get(userId) : t.overrides[userId];
+        return { ...t, content: val, isOverride: true };
       }
       return { ...t, isOverride: false };
     });
     res.json({ templates: customizedTemplates });
   } else {
-    // Admin view
     res.json({ templates });
   }
 });
@@ -293,32 +330,39 @@ app.post('/api/templates', async (req, res) => {
   const { id, name, genre, templateType, content, templateBehavior, nextTemplateId } = req.body;
   if (!id || !name || !genre || !templateType) return res.status(400).json({ error: 'Missing fields' });
 
-  const templates = await readDB('templates.json');
-  const index = templates.findIndex(t => t.id === id);
-
   const isOverride = userRole !== 'admin';
 
-  if (index >= 0) {
-    if (isOverride && userId) {
-      // Creator is saving an override for this template
-      templates[index].overrides = templates[index].overrides || {};
-      templates[index].overrides[userId] = content;
+  try {
+    let t = await Template.findOne({ id });
+    if (t) {
+      if (isOverride && userId) {
+        if (!t.overrides) t.overrides = new Map();
+        t.overrides.set(userId, content);
+      } else {
+        t.name = name;
+        t.genre = genre;
+        t.templateType = templateType;
+        t.content = content;
+        t.templateBehavior = templateBehavior;
+        t.nextTemplateId = nextTemplateId;
+      }
+      await t.save();
     } else {
-      // Admin is updating the global template
-      templates[index].name = name;
-      templates[index].genre = genre;
-      templates[index].templateType = templateType;
-      templates[index].content = content;
-      templates[index].templateBehavior = templateBehavior;
-      templates[index].nextTemplateId = nextTemplateId;
+      const overrides = {};
+      if (isOverride && userId) {
+        overrides[userId] = content;
+      }
+      await Template.create({
+        id, name, genre, templateType, templateBehavior, nextTemplateId,
+        content: isOverride ? '' : content,
+        overrides
+      });
     }
-  } else {
-    // New template
-    templates.push({ id, name, genre, templateType, templateBehavior, nextTemplateId, content: isOverride ? '' : content, overrides: isOverride && userId ? { [userId]: content } : {} });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Error saving template:', e);
+    res.status(500).json({ error: 'Failed to save template' });
   }
-
-  await writeDB('templates.json', templates);
-  res.json({ success: true });
 });
 
 app.delete('/api/templates/:id', async (req, res) => {
@@ -326,19 +370,41 @@ app.delete('/api/templates/:id', async (req, res) => {
   const { id } = req.params;
   const isOverrideDelete = req.query.override === 'true';
 
-  const templates = await readDB('templates.json');
-  const index = templates.findIndex(t => t.id === id);
-
-  if (index >= 0) {
-    if (isOverrideDelete && userId && templates[index].overrides) {
-      delete templates[index].overrides[userId];
+  try {
+    if (isOverrideDelete && userId) {
+      let t = await Template.findOne({ id });
+      if (t && t.overrides) {
+        t.overrides.delete(userId);
+        await t.save();
+      }
     } else {
-      templates.splice(index, 1);
+      await Template.deleteOne({ id });
     }
-    await writeDB('templates.json', templates);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Error deleting template:', e);
+    res.status(500).json({ error: 'Failed to delete template' });
   }
+});
 
-  res.json({ success: true });
+app.post('/api/templates/:id/chat', async (req, res) => {
+  const { id } = req.params;
+  const { role, content } = req.body;
+  if (!role || !content) return res.status(400).json({ error: 'Missing role or content' });
+
+  try {
+    let t = await Template.findOne({ id });
+    if (!t) {
+      t = await Template.create({ id, name: id, genre: 'Romantic Suspense', templateType: 'POV Guide', content: '' });
+    }
+    if (!t.chatHistory) t.chatHistory = [];
+    t.chatHistory.push({ role, content, timestamp: new Date() });
+    await t.save();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Error saving template chat:', e);
+    res.status(500).json({ error: 'Failed to save template chat' });
+  }
 });
 
 // --- HISTORY API ---
@@ -351,19 +417,29 @@ app.get('/api/history', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   try {
-    const git = simpleGit(project.folderPath);
-    if (!(await git.checkIsRepo())) return res.json({ history: [] });
-    const log = await git.log();
-    res.json({ history: log.all });
+    const list = await History.find({ projectId: project.id }).sort({ timestamp: -1 }).lean();
+    const formatted = list.map(item => ({
+      hash: item._id.toString(),
+      date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
+      message: item.log || `${item.type || 'Agent'} run`,
+      author_name: item.userId || 'AI Agent'
+    }));
+    res.json({ history: formatted });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to read git history' });
+    res.status(500).json({ error: 'Failed to read history from DB' });
   }
 });
 
 // --- CHARACTERS API ---
 app.get('/api/character-elements', async (req, res) => {
-  res.json({ elements: await readDB('characterElements.json') });
+  try {
+    const elements = await CharacterElement.find({});
+    res.json({ elements });
+  } catch (e) {
+    console.error('Error fetching character elements:', e);
+    res.status(500).json({ error: 'Failed to fetch character elements' });
+  }
 });
 
 app.post('/api/character-elements', async (req, res) => {
@@ -372,42 +448,34 @@ app.post('/api/character-elements', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const elements = await readDB('characterElements.json');
-  const index = elements.findIndex(e => e.id === newElement.id);
-  if (index >= 0) {
-    elements[index] = newElement;
-  } else {
-    elements.push(newElement);
+  try {
+    const existing = await CharacterElement.findOne({ id: newElement.id });
+    if (existing) {
+      return res.status(400).json({ error: 'Character element key already defined' });
+    }
+    const element = await CharacterElement.create(newElement);
+    res.json({ success: true, element });
+  } catch (e) {
+    console.error('Error saving character element:', e);
+    res.status(500).json({ error: 'Failed to save character element' });
   }
-
-  await writeDB('characterElements.json', elements);
-  res.json({ success: true, element: newElement });
 });
 
 app.get('/api/characters', async (req, res) => {
   const { projectId } = req.query;
-  let charsDir;
-
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    charsDir = path.join(project.folderPath, 'characters');
-  } else {
-    charsDir = path.join(NOVELS_DIR, 'characters');
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(charsDir)) return res.json({ characters: [] });
-    const files = await fs.readdir(charsDir);
-    const mdFiles = files.filter(f => f.endsWith('.md'));
-
-    const characters = [];
-    for (const file of mdFiles) {
-      const content = await fs.readFile(path.join(charsDir, file), 'utf-8');
-      characters.push({ id: file.replace('.md', ''), content });
-    }
-    res.json({ characters });
+    const list = await Character.find({ projectId: pId });
+    const formatted = list.map(c => ({
+      id: c.id,
+      name: c.name || c.id,
+      species: c.species || 'Unknown',
+      age: c.age || 'Unknown',
+      attributes: c.attributes || {},
+      content: c.content
+    }));
+    res.json({ characters: formatted });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
@@ -418,31 +486,36 @@ app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
   const { content, projectId } = req.body;
   if (!content) return res.status(400).json({ error: 'Missing content' });
-
-  let charsDir, gitDir;
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    charsDir = path.join(project.folderPath, 'characters');
-    gitDir = project.folderPath;
-  } else {
-    charsDir = path.join(NOVELS_DIR, 'characters');
-    gitDir = NOVELS_DIR;
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(charsDir)) await fs.mkdir(charsDir, { recursive: true });
-    const filePath = path.join(charsDir, `${id}.md`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    const parsedAttrs = await parseCharacterAttributes(content);
+    const nameMatch = content.match(/^\s*#\s+(.+)$/m);
+    const charName = nameMatch ? nameMatch[1].trim() : id;
 
-    const git = simpleGit(gitDir);
-    if (!(await git.checkIsRepo())) await git.init();
-    await git.add(filePath);
-    const commitResult = await git.commit(`Update character: ${id}`);
+    await Character.findOneAndUpdate(
+      { projectId: pId, id },
+      { 
+        content,
+        name: charName,
+        species: parsedAttrs['species'] || 'Unknown',
+        age: parsedAttrs['age'] || 'Unknown',
+        attributes: parsedAttrs,
+        lastEdited: new Date()
+      },
+      { upsert: true }
+    );
 
-    try { await git.push(); } catch (e) { }
-    res.json({ success: true, commit: commitResult.commit });
+    // Save to History
+    await History.create({
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      log: `Update character: ${id}`
+    });
+
+    res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving character:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -452,28 +525,12 @@ app.post('/api/characters/:id', async (req, res) => {
 // --- CHAPTERS API ---
 app.get('/api/chapters', async (req, res) => {
   const { projectId } = req.query;
-  let chapsDir;
-
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    chapsDir = project.folderPath; // Root directory
-  } else {
-    chapsDir = NOVELS_DIR; // Root directory
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(chapsDir)) return res.json({ chapters: [] });
-    const files = await fs.readdir(chapsDir);
-    const mdFiles = files.filter(f => f.toLowerCase().endsWith('.md') && !f.toLowerCase().endsWith('.note.md'));
-
-    const chapters = [];
-    for (const file of mdFiles) {
-      const content = await fs.readFile(path.join(chapsDir, file), 'utf-8');
-      chapters.push({ id: file.substring(0, file.length - 3), content }); // Remove .md
-    }
-    res.json({ chapters });
+    const list = await Chapter.find({ projectId: pId }).sort({ orderIndex: 1 });
+    const formatted = list.map(c => ({ id: c.id, content: c.content }));
+    res.json({ chapters: formatted });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
@@ -484,31 +541,28 @@ app.post('/api/chapters/:id', async (req, res) => {
   const { id } = req.params;
   const { content, projectId } = req.body;
   if (!content) return res.status(400).json({ error: 'Missing content' });
-
-  let chapsDir, gitDir;
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    chapsDir = project.folderPath;
-    gitDir = project.folderPath;
-  } else {
-    chapsDir = NOVELS_DIR;
-    gitDir = NOVELS_DIR;
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(chapsDir)) await fs.mkdir(chapsDir, { recursive: true });
-    const filePath = path.join(chapsDir, `${id}.md`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    const match = id.match(/\d+/);
+    const orderIndex = match ? parseInt(match[0]) : 999;
 
-    const git = simpleGit(gitDir);
-    if (!(await git.checkIsRepo())) await git.init();
-    await git.add(filePath);
-    const commitResult = await git.commit(`Update chapter: ${id}`);
+    await Chapter.findOneAndUpdate(
+      { projectId: pId, id },
+      { content, orderIndex, lastEdited: new Date() },
+      { upsert: true }
+    );
 
-    try { await git.push(); } catch (e) { }
-    res.json({ success: true, commit: commitResult.commit });
+    // Save to History
+    await History.create({
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      log: `Update chapter: ${id}`
+    });
+
+    res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving chapter:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -518,28 +572,12 @@ app.post('/api/chapters/:id', async (req, res) => {
 // --- NOTES API ---
 app.get('/api/notes', async (req, res) => {
   const { projectId } = req.query;
-  let notesDir;
-
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    notesDir = project.folderPath;
-  } else {
-    notesDir = NOVELS_DIR;
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(notesDir)) return res.json({ notes: [] });
-    const files = await fs.readdir(notesDir);
-    const mdFiles = files.filter(f => f.toLowerCase().endsWith('.note.md'));
-
-    const notes = [];
-    for (const file of mdFiles) {
-      const content = await fs.readFile(path.join(notesDir, file), 'utf-8');
-      notes.push({ id: file.substring(0, file.length - 8), content }); // Remove .note.md
-    }
-    res.json({ notes });
+    const list = await Note.find({ projectId: pId });
+    const formatted = list.map(n => ({ id: n.id, content: n.content }));
+    res.json({ notes: formatted });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
@@ -550,33 +588,54 @@ app.post('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
   const { content, projectId } = req.body;
   if (!content) return res.status(400).json({ error: 'Missing content' });
-
-  let notesDir, gitDir;
-  if (projectId) {
-    const projects = await readDB('projects.json');
-    const project = findProject(projects, projectId);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-    notesDir = project.folderPath;
-    gitDir = project.folderPath;
-  } else {
-    notesDir = NOVELS_DIR;
-    gitDir = NOVELS_DIR;
-  }
+  const pId = projectId || 'global';
 
   try {
-    if (!fsSync.existsSync(notesDir)) await fs.mkdir(notesDir, { recursive: true });
-    const filePath = path.join(notesDir, `${id}.note.md`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    await Note.findOneAndUpdate(
+      { projectId: pId, id },
+      { content, lastEdited: new Date() },
+      { upsert: true }
+    );
 
-    const git = simpleGit(gitDir);
-    if (!(await git.checkIsRepo())) await git.init();
-    await git.add(filePath);
-    const commitResult = await git.commit(`Update note: ${id}`);
+    // Save to History
+    await History.create({
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      log: `Update note: ${id}`
+    });
 
-    try { await git.push(); } catch (e) { }
-    res.json({ success: true, commit: commitResult.commit });
+    res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving note:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/notes/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  const pId = projectId || 'global';
+
+  try {
+    const result = await Note.deleteOne({ projectId: pId, id });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    // Save to History
+    await History.create({
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      log: `Delete note: ${id}`
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting note:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

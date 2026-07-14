@@ -6,7 +6,27 @@ const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 
-const { readDB, writeDB, execAsync, jobs } = require('./server');
+const { readDB, writeDB, execAsync, jobs, Note, Chapter } = require('./server');
+
+async function saveArtifact(projectId, type, id, content, orderIndex = null) {
+  try {
+    if (type === 'chapter') {
+      await Chapter.findOneAndUpdate(
+        { projectId, id },
+        { content, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
+        { upsert: true }
+      );
+    } else {
+      await Note.findOneAndUpdate(
+        { projectId, id },
+        { content, lastEdited: new Date() },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    console.error(`Error saving artifact ${id}:`, e);
+  }
+}
 
 // --- SSE Endpoint ---
 router.get('/sse', (req, res) => {
@@ -143,40 +163,38 @@ async function runAutomationLoop(jobId, jobData, payload) {
     const projectDir = project ? project.folderPath : '';
 
     const runAgy = async (prompt, isSubagent = true) => {
-      if (process.env.GEMINI_API_KEY) {
-        try {
-          const res = await fetch('http://app:5000/admin/api/internal/ai/chat', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-API-Key': process.env.GEMINI_API_KEY
-            },
-            body: JSON.stringify({
-              message: prompt,
-              isSubagent,
-              jobId,
-              chatHistory: jobData.chatHistory
-            })
-          });
-          if (res.ok) {
-            const json = await res.json();
-            const responseText = json.response || json.reply;
-            jobData.chatHistory.push({ role: 'user', content: prompt });
-            jobData.chatHistory.push({ role: 'model', content: responseText });
-            return { stdout: responseText, stderr: '' };
-          } else {
-            const txt = await res.text();
-            console.error(`Internal AI chat error: ${txt}`);
-            throw new Error(`Internal AI Chat error: ${txt}`);
-          }
-        } catch (e) {
-          console.error("Failed to call internal AI chat:", e);
-          throw e;
-        }
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error('GEMINI_API_KEY is not defined in environment');
       }
-      const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-      const cmd = `agy --dangerously-skip-permissions --print "${escapedPrompt}"`;
-      return execAsync(cmd, { cwd: projectDir });
+      try {
+        const res = await fetch('http://app:5000/admin/api/internal/ai/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': process.env.GEMINI_API_KEY
+          },
+          body: JSON.stringify({
+            message: prompt,
+            isSubagent,
+            jobId,
+            chatHistory: jobData.chatHistory
+          })
+        });
+        if (res.ok) {
+          const json = await res.json();
+          const responseText = json.response || json.reply;
+          jobData.chatHistory.push({ role: 'user', content: prompt });
+          jobData.chatHistory.push({ role: 'model', content: responseText });
+          return { stdout: responseText, stderr: '' };
+        } else {
+          const txt = await res.text();
+          console.error(`Internal AI chat error: ${txt}`);
+          throw new Error(`Internal AI Chat error: ${txt}`);
+        }
+      } catch (e) {
+        console.error("Failed to call internal AI chat:", e);
+        throw e;
+      }
     };
 
     if (jobData.type === 'braindump_to_dossier') {
@@ -190,54 +208,65 @@ async function runAutomationLoop(jobId, jobData, payload) {
       if (jobData.currentStep < 2) {
         const p1 = `Extract genre tropes and format requirements for: ${genre}. Based on this braindump: ${braindump}`;
         await updateJob(2, 'Step 1: Identifying Genre & Tropes...');
-        await runAgy(p1);
+        const res = await runAgy(p1);
+        await saveArtifact(jobData.projectId, 'note', 'genre_tropes', res.stdout);
         jobData.currentStep = 2;
       }
 
       if (jobData.currentStep < 3) {
         await updateJob(3, 'Step 2: Brainstorming Pitches...');
-        await runAgy("Brainstorm 5 distinct story pitches based on the previous tropes.");
+        const res = await runAgy("Brainstorm 5 distinct story pitches based on the previous tropes.");
+        await saveArtifact(jobData.projectId, 'note', 'pitches_brainstorm', res.stdout);
         jobData.currentStep = 3;
       }
 
       if (jobData.currentStep < 4) {
         await updateJob(4, 'Step 3: Evaluating Pitches...');
-        await runAgy("Evaluate the 5 pitches and select the best one.");
+        const res = await runAgy("Evaluate the 5 pitches and select the best one.");
+        await saveArtifact(jobData.projectId, 'note', 'selected_pitch', res.stdout);
         jobData.currentStep = 4;
       }
 
       if (jobData.currentStep < 5) {
         await updateJob(5, 'Step 4: Extracting Winning Pitch...');
-        await runAgy("Format the winning pitch.");
+        const res = await runAgy("Format the winning pitch.");
+        await saveArtifact(jobData.projectId, 'note', 'formatted_pitch', res.stdout);
         jobData.currentStep = 5;
       }
 
       if (jobData.currentStep < 6) {
         await updateJob(6, 'Step 5: Building Story Dossier Outline...');
-        await runAgy("Create a checklist of characters and worldbuilding elements needed for the winning pitch.");
+        const res = await runAgy("Create a checklist of characters and worldbuilding elements needed for the winning pitch.");
+        await saveArtifact(jobData.projectId, 'note', 'story_dossier_checklist', res.stdout);
         jobData.currentStep = 6;
       }
 
       if (jobData.currentStep < 7) {
         await updateJob(7, 'Step 6: Emotional Critique...');
-        await runAgy("Critique the emotional arc of the dossier.");
+        const res = await runAgy("Critique the emotional arc of the dossier.");
+        await saveArtifact(jobData.projectId, 'note', 'dossier_emotional_critique', res.stdout);
         jobData.currentStep = 7;
       }
 
       if (jobData.currentStep < 8) {
         await updateJob(8, 'Step 7: Logic Critique...');
-        await runAgy("Critique the logical consistency of the plot.");
+        const res = await runAgy("Critique the logical consistency of the plot.");
+        await saveArtifact(jobData.projectId, 'note', 'dossier_logic_critique', res.stdout);
         jobData.currentStep = 8;
       }
 
       if (jobData.currentStep < 9) {
         await updateJob(9, 'Step 8: Character Name Critique...');
-        await runAgy("Review the suggested character names for genre fit.");
+        const res = await runAgy("Review the suggested character names for genre fit.");
+        await saveArtifact(jobData.projectId, 'note', 'character_names_critique', res.stdout);
         jobData.currentStep = 9;
       }
 
       if (jobData.currentStep < 10) {
-        await updateJob(10, 'Step 10: Final Dossier Rewrite...', 'complete');
+        await updateJob(10, 'Step 10: Final Dossier Compile...');
+        const res = await runAgy("Compile all previous details and critiques into the final story dossier.");
+        await saveArtifact(jobData.projectId, 'note', 'dossier', res.stdout);
+        await updateJob(10, 'Finished Braindump to Dossier', 'complete');
         jobData.currentStep = 10;
       }
 
@@ -253,72 +282,85 @@ async function runAutomationLoop(jobId, jobData, payload) {
 
         if (jobData.currentChapterStep < 1) {
           await updateJob(1, `Starting Chapter ${chapter} - Extracting plot`);
-          await runAgy(`Extract the plot for Chapter ${chapter} from the outline.`);
+          const res = await runAgy(`Extract the plot for Chapter ${chapter} from the outline.`);
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_plot`, res.stdout);
           jobData.currentChapterStep = 1;
         }
 
         if (jobData.currentChapterStep < 2) {
           await updateJob(2, `Chapter ${chapter}: Plot Scene Brief`);
-          await runAgy("Break the chapter plot into smaller beats.");
+          const res = await runAgy("Break the chapter plot into smaller beats.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_beats`, res.stdout);
           jobData.currentChapterStep = 2;
         }
 
         if (jobData.currentChapterStep < 3) {
           await updateJob(3, `Chapter ${chapter}: Character Scene Brief`);
-          await runAgy("Detail character goals and emotional states for this scene.");
+          const res = await runAgy("Detail character goals and emotional states for this scene.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_characters_brief`, res.stdout);
           jobData.currentChapterStep = 3;
         }
 
         if (jobData.currentChapterStep < 4) {
           await updateJob(4, `Chapter ${chapter}: Worldbuilding Scene Brief`);
-          await runAgy("Detail the setting and environment for this scene.");
+          const res = await runAgy("Detail the setting and environment for this scene.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_setting_brief`, res.stdout);
           jobData.currentChapterStep = 4;
         }
 
         if (jobData.currentChapterStep < 5) {
           await updateJob(5, `Chapter ${chapter}: Chronology Check 1`);
-          await runAgy("Ensure the brief is consistent with the overall timeline.");
+          const res = await runAgy("Ensure the brief is consistent with the overall timeline.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_chronology_check`, res.stdout);
           jobData.currentChapterStep = 5;
         }
 
         if (jobData.currentChapterStep < 6) {
           await updateJob(6, `Chapter ${chapter}: Plot Scene Rewrite`);
-          await runAgy("Adjust the plot brief based on chronology.");
+          const res = await runAgy("Adjust the plot brief based on chronology.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_plot_revised`, res.stdout);
           jobData.currentChapterStep = 6;
         }
 
         if (jobData.currentChapterStep < 7) {
           await updateJob(7, `Chapter ${chapter}: Character & World Rewrite`);
-          await runAgy("Adjust character and world briefs based on chronology.");
+          const res = await runAgy("Adjust character and world briefs based on chronology.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_briefs_revised`, res.stdout);
           jobData.currentChapterStep = 7;
         }
 
         if (jobData.currentChapterStep < 9) {
           await updateJob(9, `Chapter ${chapter}: First Draft`);
-          await runAgy(`Write the prose for the chapter using ${pov} and ${tense}.`);
+          const res = await runAgy(`Write the prose for the chapter using ${pov} and ${tense}.`);
+          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
           jobData.currentChapterStep = 9;
         }
 
         if (jobData.currentChapterStep < 10) {
           await updateJob(10, `Chapter ${chapter}: Chronology Check 2`);
-          await runAgy("Check the written prose for timeline errors.");
+          const res = await runAgy("Check the written prose for timeline errors.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_chronology_check_2`, res.stdout);
           jobData.currentChapterStep = 10;
         }
 
         if (jobData.currentChapterStep < 11) {
           await updateJob(11, `Chapter ${chapter}: Style Check`);
-          await runAgy("Ensure the prose matches the genre style guide.");
+          const res = await runAgy("Ensure the prose matches the genre style guide.");
+          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_style_check`, res.stdout);
           jobData.currentChapterStep = 11;
         }
 
         if (jobData.currentChapterStep < 12) {
           await updateJob(12, `Chapter ${chapter}: Rewrite`);
-          await runAgy("Adjust the prose based on style and chronology checks.");
+          const res = await runAgy("Adjust the prose based on style and chronology checks.");
+          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
           jobData.currentChapterStep = 12;
         }
 
         if (jobData.currentChapterStep < 13) {
           const isLastChapter = (i === chapters.length - 1);
+          const res = await runAgy("Provide any final prose polish if needed, or return the final prose.");
+          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
           await updateJob(13, `Chapter ${chapter}: Final Draft`, isLastChapter ? 'complete' : 'running');
           jobData.currentChapterStep = 0; // reset step for the next chapter
         }

@@ -52,52 +52,36 @@ router.post('/api/ai/chat', async (req, res) => {
   };
 
   try {
-    // Attempt to call agy cli
-    if (!fsSync.existsSync('.agents')) {
-      fsSync.mkdirSync('.agents');
+    const flaskUrl = 'http://app:5000/admin/api/internal/ai/chat';
+    const payload = `Context: ${contextStr}\n\nPrompt: ${message}`;
+    
+    console.log('Sending chat request to internal AI API...');
+    const response = await fetch(flaskUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': process.env.GEMINI_API_KEY
+      },
+      body: JSON.stringify({
+        message: payload,
+        isSubagent: false
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Flask internal chat returned status ${response.status}: ${errText}`);
     }
 
-    console.log('Spawning agy CLI...');
-    const { spawn } = require('child_process');
-    const args = ['--print', `Context: ${contextStr}\n\nPrompt: ${message}`];
-
-    const agyProcess = spawn('agy', args);
-    let output = '';
-    let errOutput = '';
-
-    // Explicitly close stdin so agy doesn't hang waiting for piped input
-    agyProcess.stdin.end();
-
-    agyProcess.stdout.on('data', (data) => {
-      console.log(`[AGY STDOUT]: ${data}`);
-      output += data.toString();
-    });
-
-    agyProcess.stderr.on('data', (data) => {
-      console.error(`[AGY STDERR]: ${data}`);
-      errOutput += data.toString();
-    });
-
-    agyProcess.on('close', async (code) => {
-      console.log(`agy child process exited with code ${code}`);
-      if (code === 0) {
-        await updateJob('complete', `Response: ${output.trim()}`);
-        res.json({ reply: output.trim() || 'No response' });
-      } else {
-        await updateJob('error', `Error Code ${code}: ${errOutput}`);
-        res.status(500).json({ error: 'Failed to process AI chat via agy cli' });
-      }
-    });
+    const data = await response.json();
+    const reply = data.reply || data.response || 'No response';
+    await updateJob('complete', `Response: ${reply}`);
+    res.json({ reply });
 
   } catch (error) {
-    console.error('Antigravity CLI error:', error.message);
-    if (error.message.includes('command not found') || error.code === 127) {
-      await updateJob('error', 'agy CLI not installed');
-      res.json({ reply: 'Antigravity CLI (agy) not installed or mounted yet. Waiting for installation to process AI chat.' });
-    } else {
-      await updateJob('error', `CLI Error: ${error.message}`);
-      res.status(500).json({ error: 'Failed to process AI chat via agy cli' });
-    }
+    console.error('Internal AI Chat API error:', error.message);
+    await updateJob('error', `API Error: ${error.message}`);
+    res.status(500).json({ error: 'Failed to process AI chat via internal API' });
   }
 });
 
