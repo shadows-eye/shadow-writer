@@ -322,7 +322,8 @@ const util = require('util');
 const execAsync = util.promisify(exec);
 
 app.post('/api/ai/chat', async (req, res) => {
-  const { message, templateIds } = req.body;
+  const { message, templateIds, projectId } = req.body;
+  const userId = req.headers['x-user-id'] || 'system';
   if (!message) return res.status(400).json({ error: 'Missing message' });
 
   // Get templates content if provided
@@ -335,19 +336,84 @@ app.post('/api/ai/chat', async (req, res) => {
     }
   }
 
-  // Escape message securely for shell
-  const safeMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-  const safeContext = contextStr.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+  // Create job history entry
+  const crypto = require('crypto');
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId,
+    userId,
+    projectId: projectId || 'global',
+    type: 'ai_chat',
+    status: 'running',
+    progress: 0,
+    totalSteps: 1,
+    logs: [`[${new Date().toISOString()}] Prompt: ${message}`],
+    createdAt: new Date().toISOString()
+  };
+
+  const history = await readDB('history.json');
+  history.push(job);
+  await writeDB('history.json', history);
+
+  const updateJob = async (status, log) => {
+    job.status = status;
+    if (status === 'complete' || status === 'error') job.progress = 1;
+    if (log) job.logs.push(`[${new Date().toISOString()}] ${log}`);
+    
+    const hist = await readDB('history.json');
+    const idx = hist.findIndex(j => j.id === jobId);
+    if (idx >= 0) {
+      hist[idx] = job;
+      await writeDB('history.json', hist);
+    }
+  };
 
   try {
     // Attempt to call agy cli
-    const { stdout, stderr } = await execAsync(`agy chat --message "${safeMessage}" --context "${safeContext}"`);
-    res.json({ reply: stdout.trim() || 'No response' });
+    const fs = require('fs');
+    if (!fs.existsSync('.agents')) {
+      fs.mkdirSync('.agents');
+    }
+    
+    console.log('Spawning agy CLI...');
+    const { spawn } = require('child_process');
+    const args = ['--print', `Context: ${contextStr}\n\nPrompt: ${message}`];
+    
+    const agyProcess = spawn('agy', args);
+    let output = '';
+    let errOutput = '';
+    
+    // Explicitly close stdin so agy doesn't hang waiting for piped input
+    agyProcess.stdin.end();
+    
+    agyProcess.stdout.on('data', (data) => {
+      console.log(`[AGY STDOUT]: ${data}`);
+      output += data.toString();
+    });
+    
+    agyProcess.stderr.on('data', (data) => {
+      console.error(`[AGY STDERR]: ${data}`);
+      errOutput += data.toString();
+    });
+    
+    agyProcess.on('close', async (code) => {
+      console.log(`agy child process exited with code ${code}`);
+      if (code === 0) {
+        await updateJob('complete', `Response: ${output.trim()}`);
+        res.json({ reply: output.trim() || 'No response' });
+      } else {
+        await updateJob('error', `Error Code ${code}: ${errOutput}`);
+        res.status(500).json({ error: 'Failed to process AI chat via agy cli' });
+      }
+    });
+    
   } catch (error) {
     console.error('Antigravity CLI error:', error.message);
     if (error.message.includes('command not found') || error.code === 127) {
+      await updateJob('error', 'agy CLI not installed');
       res.json({ reply: 'Antigravity CLI (agy) not installed or mounted yet. Waiting for installation to process AI chat.' });
     } else {
+      await updateJob('error', `CLI Error: ${error.message}`);
       res.status(500).json({ error: 'Failed to process AI chat via agy cli' });
     }
   }
@@ -674,7 +740,15 @@ async function runAutomationLoop(jobId, jobData, payload) {
   };
 
   try {
-    const contextCmd = `--workspace "${jobData.projectId}"`; // Base context
+    const projects = await readDB('projects.json');
+    const project = projects.find(p => p.id === jobData.projectId);
+    const projectDir = project ? project.folderPath : '';
+
+    const runAgy = async (prompt) => {
+      const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+      const cmd = `agy --dangerously-skip-permissions --print "${escapedPrompt}"`;
+      return execAsync(cmd, { cwd: projectDir });
+    };
     
     if (jobData.type === 'braindump_to_dossier') {
       const { braindump, genre } = payload;
@@ -682,28 +756,28 @@ async function runAutomationLoop(jobId, jobData, payload) {
       
       const p1 = `Extract genre tropes and format requirements for: ${genre}. Based on this braindump: ${braindump}`;
       await updateJob(2, 'Step 1: Identifying Genre & Tropes...');
-      await execAsync(`antigravity chat ${contextCmd} "${p1}"`);
+      await runAgy(p1);
       
       await updateJob(3, 'Step 2: Brainstorming Pitches...');
-      await execAsync(`antigravity chat ${contextCmd} "Brainstorm 5 distinct story pitches based on the previous tropes."`);
+      await runAgy("Brainstorm 5 distinct story pitches based on the previous tropes.");
       
       await updateJob(4, 'Step 3: Evaluating Pitches...');
-      await execAsync(`antigravity chat ${contextCmd} "Evaluate the 5 pitches and select the best one."`);
+      await runAgy("Evaluate the 5 pitches and select the best one.");
       
       await updateJob(5, 'Step 4: Extracting Winning Pitch...');
-      await execAsync(`antigravity chat ${contextCmd} "Format the winning pitch."`);
+      await runAgy("Format the winning pitch.");
       
       await updateJob(6, 'Step 5: Building Story Dossier Outline...');
-      await execAsync(`antigravity chat ${contextCmd} "Create a checklist of characters and worldbuilding elements needed for the winning pitch."`);
+      await runAgy("Create a checklist of characters and worldbuilding elements needed for the winning pitch.");
       
       await updateJob(7, 'Step 6: Emotional Critique...');
-      await execAsync(`antigravity chat ${contextCmd} "Critique the emotional arc of the dossier."`);
+      await runAgy("Critique the emotional arc of the dossier.");
       
       await updateJob(8, 'Step 7: Logic Critique...');
-      await execAsync(`antigravity chat ${contextCmd} "Critique the logical consistency of the plot."`);
+      await runAgy("Critique the logical consistency of the plot.");
       
       await updateJob(9, 'Step 8: Character Name Critique...');
-      await execAsync(`antigravity chat ${contextCmd} "Review the suggested character names for genre fit."`);
+      await runAgy("Review the suggested character names for genre fit.");
       
       await updateJob(10, 'Step 10: Final Dossier Rewrite...', 'complete');
       
@@ -712,37 +786,37 @@ async function runAutomationLoop(jobId, jobData, payload) {
       
       for (const chapter of chapters) {
         await updateJob(1, `Starting Chapter ${chapter} - Extracting plot`);
-        await execAsync(`antigravity chat ${contextCmd} "Extract the plot for Chapter ${chapter} from the outline."`);
+        await runAgy(`Extract the plot for Chapter ${chapter} from the outline.`);
         
         await updateJob(2, `Chapter ${chapter}: Plot Scene Brief`);
-        await execAsync(`antigravity chat ${contextCmd} "Break the chapter plot into smaller beats."`);
+        await runAgy("Break the chapter plot into smaller beats.");
         
         await updateJob(3, `Chapter ${chapter}: Character Scene Brief`);
-        await execAsync(`antigravity chat ${contextCmd} "Detail character goals and emotional states for this scene."`);
+        await runAgy("Detail character goals and emotional states for this scene.");
         
         await updateJob(4, `Chapter ${chapter}: Worldbuilding Scene Brief`);
-        await execAsync(`antigravity chat ${contextCmd} "Detail the setting and environment for this scene."`);
+        await runAgy("Detail the setting and environment for this scene.");
         
         await updateJob(5, `Chapter ${chapter}: Chronology Check 1`);
-        await execAsync(`antigravity chat ${contextCmd} "Ensure the brief is consistent with the overall timeline."`);
+        await runAgy("Ensure the brief is consistent with the overall timeline.");
         
         await updateJob(6, `Chapter ${chapter}: Plot Scene Rewrite`);
-        await execAsync(`antigravity chat ${contextCmd} "Adjust the plot brief based on chronology."`);
+        await runAgy("Adjust the plot brief based on chronology.");
         
         await updateJob(7, `Chapter ${chapter}: Character & World Rewrite`);
-        await execAsync(`antigravity chat ${contextCmd} "Adjust character and world briefs based on chronology."`);
+        await runAgy("Adjust character and world briefs based on chronology.");
         
         await updateJob(9, `Chapter ${chapter}: First Draft`);
-        await execAsync(`antigravity chat ${contextCmd} "Write the prose for the chapter using ${pov} and ${tense}."`);
+        await runAgy(`Write the prose for the chapter using ${pov} and ${tense}.`);
         
         await updateJob(10, `Chapter ${chapter}: Chronology Check 2`);
-        await execAsync(`antigravity chat ${contextCmd} "Check the written prose for timeline errors."`);
+        await runAgy("Check the written prose for timeline errors.");
         
         await updateJob(11, `Chapter ${chapter}: Style Check`);
-        await execAsync(`antigravity chat ${contextCmd} "Ensure the prose matches the genre style guide."`);
+        await runAgy("Ensure the prose matches the genre style guide.");
         
         await updateJob(12, `Chapter ${chapter}: Rewrite`);
-        await execAsync(`antigravity chat ${contextCmd} "Adjust the prose based on style and chronology checks."`);
+        await runAgy("Adjust the prose based on style and chronology checks.");
         
         await updateJob(13, `Chapter ${chapter}: Final Draft`, 'complete');
       }
