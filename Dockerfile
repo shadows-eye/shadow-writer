@@ -9,7 +9,7 @@ FROM node:20-bookworm-slim
 WORKDIR /app/backend
 
 # Install ca-certificates so Go binaries (like agy) can verify TLS certificates
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates git && rm -rf /var/lib/apt/lists/*
 
 COPY backend/package*.json ./
 RUN npm install
