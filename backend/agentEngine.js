@@ -45,6 +45,17 @@ async function resolveContextData(projectId, contextList) {
         contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${n.content}`).join('\n\n') + '\n';
       }
     }
+    else if (ctx === 'dossier') {
+      const dossierNote = await Note.findOne({ projectId, id: 'dossier' }).lean();
+      if (dossierNote) {
+        contextStr += `\n[Project Dossier]\n${dossierNote.content}\n`;
+      } else {
+        const dossierNotes = await Note.find({ projectId, id: /dossier/i }).lean();
+        if (dossierNotes.length > 0) {
+          contextStr += '\n[Project Dossier]\n' + dossierNotes.map(n => n.content).join('\n\n') + '\n';
+        }
+      }
+    }
     else if (ctx === 'templates') {
       const templates = await Template.find({ templateBehavior: 'Context Skill' }).lean();
       if (templates.length > 0) {
@@ -354,7 +365,22 @@ async function runAutomationLoop(jobId, jobData, payload) {
           await updateJob(progressPct, `Chapter ${chapter}: ${subagentTmpl.name}...`);
 
           // Fetch only declared subagent context type inputs
-          const subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
+          let subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
+
+          // Auto-propagate Context Skills linked to the parent workflow
+          const parentContextTypes = template.contextTypes || [];
+          if (parentContextTypes.length > 0) {
+            const linkedContexts = await Template.find({
+              id: { $in: parentContextTypes },
+              templateBehavior: 'Context Skill'
+            }).lean();
+            if (linkedContexts.length > 0) {
+              const linkedContextStr = linkedContexts
+                .map(t => `\n--- Context Guide: ${t.name} ---\n${t.content}`)
+                .join('\n');
+              subContext = linkedContextStr + '\n' + subContext;
+            }
+          }
 
           // Interpolate variables
           const taskPrompt = interpolateString(subagentTmpl.content || '', chapterPayload);
@@ -414,7 +440,22 @@ async function runAutomationLoop(jobId, jobData, payload) {
         await updateJob(progressPct, `Step ${s + 1}/${subagentCount}: ${subagentTmpl.name}...`);
 
         // Fetch only subagent context type inputs
-        const subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
+        let subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
+
+        // Auto-propagate Context Skills linked to the parent workflow
+        const parentContextTypes = template.contextTypes || [];
+        if (parentContextTypes.length > 0) {
+          const linkedContexts = await Template.find({
+            id: { $in: parentContextTypes },
+            templateBehavior: 'Context Skill'
+          }).lean();
+          if (linkedContexts.length > 0) {
+            const linkedContextStr = linkedContexts
+              .map(t => `\n--- Context Guide: ${t.name} ---\n${t.content}`)
+              .join('\n');
+            subContext = linkedContextStr + '\n' + subContext;
+          }
+        }
 
         // Interpolate variables
         const taskPrompt = interpolateString(subagentTmpl.content || '', payload);

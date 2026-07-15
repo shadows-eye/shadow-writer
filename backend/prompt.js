@@ -33,6 +33,17 @@ async function resolveContextData(projectId, contextList) {
         contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${n.content}`).join('\n\n') + '\n';
       }
     }
+    else if (ctx === 'dossier') {
+      const dossierNote = await Note.findOne({ projectId, id: 'dossier' }).lean();
+      if (dossierNote) {
+        contextStr += `\n[Project Dossier]\n${dossierNote.content}\n`;
+      } else {
+        const dossierNotes = await Note.find({ projectId, id: /dossier/i }).lean();
+        if (dossierNotes.length > 0) {
+          contextStr += '\n[Project Dossier]\n' + dossierNotes.map(n => n.content).join('\n\n') + '\n';
+        }
+      }
+    }
     else if (ctx === 'templates') {
       const templates = await Template.find({ templateBehavior: 'Context Skill' }).lean();
       if (templates.length > 0) {
@@ -56,7 +67,7 @@ router.post('/api/ai/chat', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Missing message' });
 
   // Separate high-level context categories from template IDs
-  const highLevelTypes = ['project', 'chapters', 'characters', 'notes', 'templates', 'workspace'];
+  const highLevelTypes = ['dossier', 'project', 'chapters', 'characters', 'notes', 'templates', 'workspace'];
   const selectedContextTypes = (templateIds || []).filter(id => highLevelTypes.includes(id));
   const selectedTemplateIds = (templateIds || []).filter(id => !highLevelTypes.includes(id));
 
