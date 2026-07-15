@@ -33,6 +33,16 @@ const TemplateSchema = new mongoose.Schema({
   content: String,
   templateBehavior: String,
   nextTemplateId: String,
+  model: { type: String, default: 'gemini-3.5-flash' },
+  thinkingLevel: { type: String, default: 'high' },
+  contextTypes: [{ type: String }], // e.g. ['project', 'chapters', 'notes', 'templates']
+  subagents: [{
+    step: Number,
+    subagentTemplateId: String, // References a Template ID of type 'Subagent'
+    contextInputs: [{ type: String }],
+    outputType: { type: String, default: 'note', enum: ['note', 'chapter', 'character'] },
+    outputId: String
+  }],
   overrides: { type: Map, of: String },
   chatHistory: [{
     role: String,
@@ -56,13 +66,21 @@ const CharacterElementSchema = new mongoose.Schema({
 const CharacterElement = mongoose.model('CharacterElement', CharacterElementSchema);
 
 const HistorySchema = new mongoose.Schema({
-  jobId: String,
+  jobId: { type: String, unique: true, required: true },
   userId: String,
   projectId: String,
   type: String,
   status: String,
   progress: Number,
-  log: String,
+  totalSteps: Number,
+  currentStep: Number,
+  logs: [String],
+  chatHistory: [{
+    role: String,
+    content: String,
+    timestamp: { type: Date, default: Date.now }
+  }],
+  payload: mongoose.Schema.Types.Mixed,
   timestamp: { type: Date, default: Date.now }
 });
 const History = mongoose.model('History', HistorySchema);
@@ -71,6 +89,7 @@ const ChapterSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true }, // e.g. "chapter-1"
   content: String,
+  attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic stats/sliders
   orderIndex: Number,
   lastEdited: { type: Date, default: Date.now }
 });
@@ -83,7 +102,7 @@ const CharacterSchema = new mongoose.Schema({
   name: String,
   species: String,
   age: String,
-  attributes: { type: Map, of: String },
+  attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic attributes
   content: String,
   lastEdited: { type: Date, default: Date.now }
 });
@@ -93,6 +112,9 @@ const Character = mongoose.model('Character', CharacterSchema);
 const NoteSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
+  name: String,
+  type: { type: String, default: 'note' },
+  attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic attributes
   content: String,
   lastEdited: { type: Date, default: Date.now }
 });
@@ -162,21 +184,90 @@ function findProject(projects, projectId) {
   return p;
 }
 
-async function seedDatabaseIfEmpty() {
-  // 1. Seed Templates
-  const templateCount = await Template.countDocuments();
-  if (templateCount === 0) {
-    const templatesPath = path.join(__dirname, 'db', 'templates.json');
-    if (fs.existsSync(templatesPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-        if (data && data.length > 0) {
-          await Template.insertMany(data);
-          console.log(`✓ Auto-seeded ${data.length} templates into MongoDB.`);
+function extractAttributesAndContent(content) {
+  const attributes = {};
+  let cleanContent = content || '';
+
+  if (!content) return { attributes, cleanContent };
+
+  // 1. Try parsing JSON code block: ```json ... ```
+  const jsonRegex = /```json\s*\n([\s\S]*?)\n```/i;
+  const jsonMatch = content.match(jsonRegex);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      Object.assign(attributes, parsed);
+      // Clean JSON code block out of content
+      cleanContent = cleanContent.replace(jsonRegex, '').trim();
+    } catch (e) {
+      console.warn("Failed to parse JSON code block in content:", e);
+    }
+  }
+
+  // 2. Try parsing YAML front-matter: between --- and --- at the start
+  const fmRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/i;
+  const fmMatch = content.match(fmRegex);
+  if (fmMatch) {
+    const lines = fmMatch[1].split('\n');
+    lines.forEach(line => {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0) {
+        const key = line.substring(0, colonIdx).trim();
+        let value = line.substring(colonIdx + 1).trim();
+
+        // Parse basic types: boolean, number, or strings
+        if (value.startsWith('"') && value.endsWith('"')) {
+          value = value.slice(1, -1);
+        } else if (value.startsWith("'") && value.endsWith("'")) {
+          value = value.slice(1, -1);
+        } else if (value.toLowerCase() === 'true') {
+          value = true;
+        } else if (value.toLowerCase() === 'false') {
+          value = false;
+        } else if (!isNaN(value) && value !== '') {
+          value = Number(value);
         }
-      } catch (err) {
-        console.error('Failed to auto-seed templates:', err);
+        attributes[key] = value;
       }
+    });
+    cleanContent = cleanContent.replace(fmRegex, '').trim();
+  }
+
+  return { attributes, cleanContent };
+}
+
+async function seedDatabaseIfEmpty() {
+  // 1. Sync Templates (using upsert by id so updates propagate)
+  const templatesPath = path.join(__dirname, 'db', 'templates.json');
+  if (fs.existsSync(templatesPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          // Sync except we preserve overrides if they exist
+          await Template.findOneAndUpdate(
+            { id: item.id },
+            { 
+              $set: {
+                name: item.name,
+                genre: item.genre,
+                templateType: item.templateType,
+                content: item.content,
+                templateBehavior: item.templateBehavior,
+                nextTemplateId: item.nextTemplateId || '',
+                model: item.model || 'gemini-3.5-flash',
+                thinkingLevel: item.thinkingLevel || 'high',
+                contextTypes: item.contextTypes || [],
+                subagents: item.subagents || []
+              }
+            },
+            { upsert: true, new: true }
+          );
+        }
+        console.log(`✓ Synchronized ${data.length} templates from templates.json into MongoDB.`);
+      }
+    } catch (err) {
+      console.error('Failed to sync templates:', err);
     }
   }
 
@@ -319,6 +410,7 @@ module.exports = {
   writeDB,
   parseCharacterAttributes,
   migrateExistingCharacters,
+  extractAttributesAndContent,
   findProject,
   Project,
   Template,

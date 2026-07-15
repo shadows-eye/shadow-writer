@@ -21,8 +21,12 @@ async function main() {
         genre: t.genre,
         templateType: t.templateType,
         templateBehavior: t.templateBehavior,
-        nextTemplateId: t.nextTemplateId,
+        nextTemplateId: t.nextTemplateId || '',
         content: t.content,
+        model: t.model || 'gemini-3.5-flash',
+        thinkingLevel: t.thinkingLevel || 'high',
+        contextTypes: t.contextTypes || [],
+        subagents: t.subagents || [],
         overrides: t.overrides
       },
       { upsert: true, new: true }

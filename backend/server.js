@@ -63,7 +63,7 @@ app.get('/api/project-status', async (req, res) => {
   const { projectId } = req.query;
   if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -109,7 +109,7 @@ app.get('/api/project-status', async (req, res) => {
 });
 
 app.get('/api/projects', async (req, res) => {
-  res.json({ projects: await readDB('projects.json') });
+  res.json({ projects: await Project.find({}).lean() });
 });
 
 app.post('/api/projects', async (req, res) => {
@@ -128,7 +128,7 @@ app.post('/api/projects', async (req, res) => {
 
 app.get('/api/projects/:projectId/export', async (req, res) => {
   const { projectId } = req.params;
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -225,7 +225,7 @@ app.post('/api/context-files', async (req, res) => {
     return res.status(400).json({ error: 'Missing or invalid fields' });
   }
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -248,7 +248,7 @@ app.get('/api/context-files', async (req, res) => {
   const { projectId, destination } = req.query;
   if (!projectId || !destination) return res.status(400).json({ error: 'Missing fields' });
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -271,7 +271,7 @@ app.put('/api/context-files', async (req, res) => {
     return res.status(400).json({ error: 'Missing fields' });
   }
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -292,7 +292,7 @@ app.delete('/api/context-files', async (req, res) => {
   const { projectId, destination, path: relPath } = req.query;
   if (!projectId || !destination || !relPath) return res.status(400).json({ error: 'Missing fields' });
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -308,26 +308,31 @@ app.delete('/api/context-files', async (req, res) => {
 // --- TEMPLATES API ---
 app.get('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
-  const templates = await readDB('templates.json');
+  try {
+    const templates = await Template.find({}).lean();
 
-  if (userId) {
-    const customizedTemplates = templates.map(t => {
-      if (t.overrides && (t.overrides[userId] || (t.overrides instanceof Map && t.overrides.get(userId)))) {
-        const val = t.overrides instanceof Map ? t.overrides.get(userId) : t.overrides[userId];
-        return { ...t, content: val, isOverride: true };
-      }
-      return { ...t, isOverride: false };
-    });
-    res.json({ templates: customizedTemplates });
-  } else {
-    res.json({ templates });
+    if (userId) {
+      const customizedTemplates = templates.map(t => {
+        if (t.overrides && (t.overrides[userId] || (t.overrides instanceof Map && t.overrides.get(userId)))) {
+          const val = t.overrides instanceof Map ? t.overrides.get(userId) : t.overrides[userId];
+          return { ...t, content: val, isOverride: true };
+        }
+        return { ...t, isOverride: false };
+      });
+      res.json({ templates: customizedTemplates });
+    } else {
+      res.json({ templates });
+    }
+  } catch (e) {
+    console.error('Error fetching templates:', e);
+    res.status(500).json({ error: 'Failed to fetch templates' });
   }
 });
 
 app.post('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const userRole = req.headers['x-user-role'] || 'creator';
-  const { id, name, genre, templateType, content, templateBehavior, nextTemplateId } = req.body;
+  const { id, name, genre, templateType, content, templateBehavior, nextTemplateId, model, thinkingLevel, contextTypes, subagents } = req.body;
   if (!id || !name || !genre || !templateType) return res.status(400).json({ error: 'Missing fields' });
 
   const isOverride = userRole !== 'admin';
@@ -344,7 +349,11 @@ app.post('/api/templates', async (req, res) => {
         t.templateType = templateType;
         t.content = content;
         t.templateBehavior = templateBehavior;
-        t.nextTemplateId = nextTemplateId;
+        t.nextTemplateId = nextTemplateId || '';
+        t.model = model || 'gemini-3.5-flash';
+        t.thinkingLevel = thinkingLevel || 'high';
+        t.contextTypes = contextTypes || [];
+        t.subagents = subagents || [];
       }
       await t.save();
     } else {
@@ -353,8 +362,12 @@ app.post('/api/templates', async (req, res) => {
         overrides[userId] = content;
       }
       await Template.create({
-        id, name, genre, templateType, templateBehavior, nextTemplateId,
+        id, name, genre, templateType, templateBehavior, nextTemplateId: nextTemplateId || '',
         content: isOverride ? '' : content,
+        model: model || 'gemini-3.5-flash',
+        thinkingLevel: thinkingLevel || 'high',
+        contextTypes: contextTypes || [],
+        subagents: subagents || [],
         overrides
       });
     }
@@ -412,7 +425,7 @@ app.get('/api/history', async (req, res) => {
   const { projectId } = req.query;
   if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
 
-  const projects = await readDB('projects.json');
+  const projects = await Project.find({}).lean();
   const project = findProject(projects, projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -529,7 +542,7 @@ app.get('/api/chapters', async (req, res) => {
 
   try {
     const list = await Chapter.find({ projectId: pId }).sort({ orderIndex: 1 });
-    const formatted = list.map(c => ({ id: c.id, content: c.content }));
+    const formatted = list.map(c => ({ id: c.id, content: c.content, attributes: c.attributes }));
     res.json({ chapters: formatted });
   } catch (err) {
     console.error(err);
@@ -546,20 +559,23 @@ app.post('/api/chapters/:id', async (req, res) => {
   try {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
+    const { extractAttributesAndContent } = require('./mongoDB');
+    const { attributes, cleanContent } = extractAttributesAndContent(content);
 
     await Chapter.findOneAndUpdate(
       { projectId: pId, id },
-      { content, orderIndex, lastEdited: new Date() },
+      { content: cleanContent, attributes, orderIndex, lastEdited: new Date() },
       { upsert: true }
     );
 
     // Save to History
     await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
       projectId: pId,
       type: 'manual_edit',
       status: 'complete',
       progress: 1.0,
-      log: `Update chapter: ${id}`
+      logs: [`Update chapter: ${id}`]
     });
 
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
@@ -576,7 +592,7 @@ app.get('/api/notes', async (req, res) => {
 
   try {
     const list = await Note.find({ projectId: pId });
-    const formatted = list.map(n => ({ id: n.id, content: n.content }));
+    const formatted = list.map(n => ({ id: n.id, content: n.content, name: n.name, type: n.type, attributes: n.attributes }));
     res.json({ notes: formatted });
   } catch (err) {
     console.error(err);
@@ -591,19 +607,25 @@ app.post('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
+    const { extractAttributesAndContent } = require('./mongoDB');
+    const { attributes, cleanContent } = extractAttributesAndContent(content);
+    const name = attributes.name || id;
+    const type = attributes.type || 'note';
+
     await Note.findOneAndUpdate(
       { projectId: pId, id },
-      { content, lastEdited: new Date() },
+      { name, type, content: cleanContent, attributes, lastEdited: new Date() },
       { upsert: true }
     );
 
     // Save to History
     await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
       projectId: pId,
       type: 'manual_edit',
       status: 'complete',
       progress: 1.0,
-      log: `Update note: ${id}`
+      logs: [`Update note: ${id}`]
     });
 
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });

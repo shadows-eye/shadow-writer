@@ -1,25 +1,91 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const simpleGit = require('simple-git');
 const path = require('path');
-const fs = require('fs/promises');
-const fsSync = require('fs');
 
-const { readDB, writeDB, execAsync, jobs, Note, Chapter } = require('./server');
+const { jobs, execAsync } = require('./server');
+const { Project, Template, History, Note, Chapter, Character, ContextFile, extractAttributesAndContent } = require('./mongoDB');
+
+// Helper to replace variable placeholders in prompts or paths
+function interpolateString(str, payload) {
+  if (!str) return '';
+  let result = str;
+  for (const [key, value] of Object.entries(payload || {})) {
+    result = result.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), value);
+  }
+  return result;
+}
+
+// Compile and format context data based on declared context types
+async function resolveContextData(projectId, contextList) {
+  if (!contextList || contextList.length === 0) return '';
+  let contextStr = '';
+
+  const project = await Project.findOne({ id: projectId }).lean();
+  
+  for (const ctx of contextList) {
+    if (ctx === 'project' && project) {
+      contextStr += `\n[Project Metadata]\nName: ${project.name}\nPOV: ${project.writingPOV || 'Not specified'}\nTense: ${project.writingTense || 'Not specified'}\n`;
+    }
+    else if (ctx === 'chapters') {
+      const chapters = await Chapter.find({ projectId }).sort({ orderIndex: 1 }).lean();
+      if (chapters.length > 0) {
+        contextStr += '\n[Project Chapters]\n' + chapters.map(c => `--- Chapter: ${c.id} ---\n${c.content}`).join('\n\n') + '\n';
+      }
+    }
+    else if (ctx === 'characters') {
+      const characters = await Character.find({ projectId }).lean();
+      if (characters.length > 0) {
+        contextStr += '\n[Character Profiles]\n' + characters.map(c => `--- Character: ${c.name || c.id} ---\n${c.content}`).join('\n\n') + '\n';
+      }
+    }
+    else if (ctx === 'notes') {
+      const notes = await Note.find({ projectId }).lean();
+      if (notes.length > 0) {
+        contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${n.content}`).join('\n\n') + '\n';
+      }
+    }
+    else if (ctx === 'templates') {
+      const templates = await Template.find({ templateBehavior: 'Context Skill' }).lean();
+      if (templates.length > 0) {
+        contextStr += '\n[Writing Rules & Style Guidelines]\n' + templates.map(t => `--- ${t.name} ---\n${t.content}`).join('\n\n') + '\n';
+      }
+    }
+    else if (ctx === 'workspace') {
+      const files = await ContextFile.find({ projectId }).lean();
+      if (files.length > 0) {
+        contextStr += '\n[Workspace Files]\n' + files.map(f => `Path: ${f.path}\nContent:\n${f.content}`).join('\n\n') + '\n';
+      }
+    }
+  }
+
+  return contextStr;
+}
 
 async function saveArtifact(projectId, type, id, content, orderIndex = null) {
   try {
+    const { attributes, cleanContent } = extractAttributesAndContent(content);
+
     if (type === 'chapter') {
       await Chapter.findOneAndUpdate(
         { projectId, id },
-        { content, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
+        { content: cleanContent, attributes, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
+        { upsert: true }
+      );
+    } else if (type === 'character') {
+      const nameMatch = cleanContent.match(/^\s*#\s+(.+)$/m);
+      const name = attributes.name || (nameMatch ? nameMatch[1].trim() : id);
+      await Character.findOneAndUpdate(
+        { projectId, id },
+        { name, content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     } else {
+      const name = attributes.name || id;
+      const noteType = attributes.type || type || 'note';
       await Note.findOneAndUpdate(
         { projectId, id },
-        { content, lastEdited: new Date() },
+        { name, type: noteType, content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     }
@@ -51,29 +117,53 @@ router.post('/api/automation/start', async (req, res) => {
   const { type, projectId, payload, resumeJobId } = req.body;
 
   if (resumeJobId) {
-    const history = await readDB('history.json');
-    const job = history.find(j => j.id === resumeJobId);
+    const job = await History.findOne({ jobId: resumeJobId });
     if (!job) return res.status(404).json({ error: 'Job not found to resume' });
 
     job.status = 'running';
     job.logs.push(`[${new Date().toISOString()}] Resuming pipeline execution from step ${job.currentStep || 0}...`);
-    await writeDB('history.json', history);
+    await job.save();
 
-    runAutomationLoop(resumeJobId, job, job.payload || payload);
+    const jobData = {
+      id: job.jobId,
+      userId: job.userId,
+      projectId: job.projectId,
+      type: job.type,
+      status: job.status,
+      progress: job.progress,
+      totalSteps: job.totalSteps,
+      currentStep: job.currentStep,
+      chatHistory: job.chatHistory || [],
+      logs: job.logs,
+      payload: job.payload
+    };
+
+    runAutomationLoop(resumeJobId, jobData, job.payload || payload);
     return res.json({ success: true, jobId: resumeJobId });
   }
 
   if (!type || !projectId) return res.status(400).json({ error: 'Missing type or projectId' });
 
+  // Resolve template to determine steps
+  let templateId = type;
+  if (templateId === 'braindump_to_dossier') templateId = 'dossier';
+  const template = await Template.findOne({ id: templateId });
+  const subagentsCount = (template && template.subagents) ? template.subagents.length : 10;
+  
+  let totalSteps = subagentsCount + 1; // 1 (main Agent planning) + N (subagents)
+  if (type === 'chapter_generator' && payload && payload.chapters) {
+    totalSteps = payload.chapters.length * subagentsCount;
+  }
+
   const jobId = crypto.randomUUID();
-  const job = {
+  const jobData = {
     id: jobId,
     userId,
     projectId,
     type,
     status: 'running',
     progress: 0,
-    totalSteps: type === 'braindump_to_dossier' ? 10 : 13,
+    totalSteps,
     currentStep: 0,
     chatHistory: [],
     logs: [],
@@ -81,57 +171,82 @@ router.post('/api/automation/start', async (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  const history = await readDB('history.json');
-  history.push(job);
-  await writeDB('history.json', history);
+  await History.create({
+    jobId,
+    userId,
+    projectId,
+    type,
+    status: 'running',
+    progress: 0,
+    totalSteps,
+    currentStep: 0,
+    logs: [],
+    chatHistory: [],
+    payload
+  });
 
-  runAutomationLoop(jobId, job, payload);
+  runAutomationLoop(jobId, jobData, payload);
 
   res.json({ success: true, jobId });
 });
 
 router.get('/api/automation/history', async (req, res) => {
   const userId = req.headers['x-user-id'] || 'system';
-  const history = await readDB('history.json');
-  const userHistory = history.filter(j => j.userId === userId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json({ history: userHistory });
+  try {
+    const list = await History.find({ userId }).sort({ timestamp: -1 }).lean();
+    const formatted = list.map(j => ({
+      id: j.jobId,
+      userId: j.userId,
+      projectId: j.projectId,
+      type: j.type,
+      status: j.status,
+      progress: j.progress,
+      totalSteps: j.totalSteps,
+      currentStep: j.currentStep,
+      logs: j.logs || [],
+      createdAt: j.timestamp ? j.timestamp.toISOString() : new Date().toISOString()
+    }));
+    res.json({ history: formatted });
+  } catch (e) {
+    console.error('Error fetching history:', e);
+    res.status(500).json({ error: 'Failed to fetch automation history' });
+  }
 });
 
 router.post('/api/automation/log', async (req, res) => {
   const { jobId, userId, projectId, type, status, progress, log, createIfMissing } = req.body;
   if (!jobId) return res.status(400).json({ error: 'Missing jobId' });
 
-  const history = await readDB('history.json');
-  let jobIdx = history.findIndex(j => j.id === jobId);
-  let job = jobIdx >= 0 ? history[jobIdx] : null;
+  try {
+    let job = await History.findOne({ jobId });
 
-  if (!job) {
-    if (!createIfMissing) {
-      return res.status(404).json({ error: 'Job not found' });
+    if (!job) {
+      if (!createIfMissing) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      job = new History({
+        jobId,
+        userId: userId || 'system',
+        projectId: projectId || 'global',
+        type: type || 'agent_chat',
+        status: status || 'running',
+        progress: progress || 0,
+        totalSteps: 1,
+        currentStep: 0,
+        logs: []
+      });
     }
-    job = {
-      id: jobId,
-      userId: userId || 'system',
-      projectId: projectId || 'global',
-      type: type || 'agent_chat',
-      status: status || 'running',
-      progress: progress || 0,
-      totalSteps: 1,
-      logs: [],
-      createdAt: new Date().toISOString()
-    };
-    history.push(job);
-    jobIdx = history.length - 1;
+
+    if (status) job.status = status;
+    if (progress !== undefined) job.progress = progress;
+    if (log) job.logs.push(`[${new Date().toISOString()}] ${log}`);
+
+    await job.save();
+    res.json({ success: true, job });
+  } catch (e) {
+    console.error('Error in automation logging:', e);
+    res.status(500).json({ error: 'Failed to update job logs' });
   }
-
-  if (status) job.status = status;
-  if (progress !== undefined) job.progress = progress;
-  if (log) job.logs.push(`[${new Date().toISOString()}] ${log}`);
-
-  history[jobIdx] = job;
-  await writeDB('history.json', history);
-
-  res.json({ success: true, job });
 });
 
 // --- Automation Loop Execution ---
@@ -144,12 +259,16 @@ async function runAutomationLoop(jobId, jobData, payload) {
     jobData.status = status;
     if (log) jobData.logs.push(`[${new Date().toISOString()}] ${log}`);
 
-    const history = await readDB('history.json');
-    const index = history.findIndex(j => j.id === jobId);
-    if (index >= 0) {
-      history[index] = jobData;
-      await writeDB('history.json', history);
-    }
+    await History.findOneAndUpdate(
+      { jobId: jobId },
+      { 
+        status: jobData.status, 
+        progress: jobData.progress,
+        logs: jobData.logs,
+        chatHistory: jobData.chatHistory,
+        currentStep: jobData.currentStep
+      }
+    );
 
     const res = jobs.get(jobId);
     if (res) {
@@ -158,27 +277,27 @@ async function runAutomationLoop(jobId, jobData, payload) {
   };
 
   try {
-    const projects = await readDB('projects.json');
-    const project = projects.find(p => p.id === jobData.projectId);
-    const projectDir = project ? project.folderPath : '';
-
-    const runAgy = async (prompt, isSubagent = true) => {
+    const runAgy = async (prompt, isSubagent = true, modelOverride = null, thinkingOverride = null) => {
       if (!process.env.GEMINI_API_KEY) {
         throw new Error('GEMINI_API_KEY is not defined in environment');
       }
       try {
+        const payloadToSend = {
+          message: prompt,
+          isSubagent,
+          jobId,
+          chatHistory: jobData.chatHistory,
+          model: modelOverride || (isSubagent ? 'gemini-3.1-flash-lite' : 'gemini-3.5-flash'),
+          thinkingLevel: thinkingOverride || (isSubagent ? 'low' : 'high')
+        };
+
         const res = await fetch('http://app:5000/admin/api/internal/ai/chat', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-API-Key': process.env.GEMINI_API_KEY
           },
-          body: JSON.stringify({
-            message: prompt,
-            isSubagent,
-            jobId,
-            chatHistory: jobData.chatHistory
-          })
+          body: JSON.stringify(payloadToSend)
         });
         if (res.ok) {
           const json = await res.json();
@@ -188,7 +307,6 @@ async function runAutomationLoop(jobId, jobData, payload) {
           return { stdout: responseText, stderr: '' };
         } else {
           const txt = await res.text();
-          console.error(`Internal AI chat error: ${txt}`);
           throw new Error(`Internal AI Chat error: ${txt}`);
         }
       } catch (e) {
@@ -197,175 +315,129 @@ async function runAutomationLoop(jobId, jobData, payload) {
       }
     };
 
-    if (jobData.type === 'braindump_to_dossier') {
-      const { braindump, genre } = payload;
+    // Determine target agent template ID
+    let templateId = jobData.type;
+    if (templateId === 'braindump_to_dossier') templateId = 'dossier';
 
-      if (jobData.currentStep < 1) {
-        await updateJob(1, `Started Braindump to Dossier for genre: ${genre}`);
-        jobData.currentStep = 1;
-      }
+    const template = await Template.findOne({ id: templateId });
+    if (!template) {
+      throw new Error(`Workflow template not found for type: ${jobData.type}`);
+    }
 
-      if (jobData.currentStep < 2) {
-        const p1 = `Extract genre tropes and format requirements for: ${genre}. Based on this braindump: ${braindump}`;
-        await updateJob(2, 'Step 1: Identifying Genre & Tropes...');
-        const res = await runAgy(p1);
-        await saveArtifact(jobData.projectId, 'note', 'genre_tropes', res.stdout);
-        jobData.currentStep = 2;
-      }
+    const subagents = template.subagents || [];
+    const subagentCount = subagents.length;
 
-      if (jobData.currentStep < 3) {
-        await updateJob(3, 'Step 2: Brainstorming Pitches...');
-        const res = await runAgy("Brainstorm 5 distinct story pitches based on the previous tropes.");
-        await saveArtifact(jobData.projectId, 'note', 'pitches_brainstorm', res.stdout);
-        jobData.currentStep = 3;
-      }
-
-      if (jobData.currentStep < 4) {
-        await updateJob(4, 'Step 3: Evaluating Pitches...');
-        const res = await runAgy("Evaluate the 5 pitches and select the best one.");
-        await saveArtifact(jobData.projectId, 'note', 'selected_pitch', res.stdout);
-        jobData.currentStep = 4;
-      }
-
-      if (jobData.currentStep < 5) {
-        await updateJob(5, 'Step 4: Extracting Winning Pitch...');
-        const res = await runAgy("Format the winning pitch.");
-        await saveArtifact(jobData.projectId, 'note', 'formatted_pitch', res.stdout);
-        jobData.currentStep = 5;
-      }
-
-      if (jobData.currentStep < 6) {
-        await updateJob(6, 'Step 5: Building Story Dossier Outline...');
-        const res = await runAgy("Create a checklist of characters and worldbuilding elements needed for the winning pitch.");
-        await saveArtifact(jobData.projectId, 'note', 'story_dossier_checklist', res.stdout);
-        jobData.currentStep = 6;
-      }
-
-      if (jobData.currentStep < 7) {
-        await updateJob(7, 'Step 6: Emotional Critique...');
-        const res = await runAgy("Critique the emotional arc of the dossier.");
-        await saveArtifact(jobData.projectId, 'note', 'dossier_emotional_critique', res.stdout);
-        jobData.currentStep = 7;
-      }
-
-      if (jobData.currentStep < 8) {
-        await updateJob(8, 'Step 7: Logic Critique...');
-        const res = await runAgy("Critique the logical consistency of the plot.");
-        await saveArtifact(jobData.projectId, 'note', 'dossier_logic_critique', res.stdout);
-        jobData.currentStep = 8;
-      }
-
-      if (jobData.currentStep < 9) {
-        await updateJob(9, 'Step 8: Character Name Critique...');
-        const res = await runAgy("Review the suggested character names for genre fit.");
-        await saveArtifact(jobData.projectId, 'note', 'character_names_critique', res.stdout);
-        jobData.currentStep = 9;
-      }
-
-      if (jobData.currentStep < 10) {
-        await updateJob(10, 'Step 10: Final Dossier Compile...');
-        const res = await runAgy("Compile all previous details and critiques into the final story dossier.");
-        await saveArtifact(jobData.projectId, 'note', 'dossier', res.stdout);
-        await updateJob(10, 'Finished Braindump to Dossier', 'complete');
-        jobData.currentStep = 10;
-      }
-
-    } else if (jobData.type === 'chapter_generator') {
+    // --- Dynamic Execution: Chapter Generation Loop ---
+    if (jobData.type === 'chapter_generator') {
       const { chapters, pov, tense } = payload;
-
       jobData.currentChapterIndex = jobData.currentChapterIndex || 0;
       jobData.currentChapterStep = jobData.currentChapterStep || 0;
+
+      let previousOutput = '';
 
       for (let i = jobData.currentChapterIndex; i < chapters.length; i++) {
         const chapter = chapters[i];
         jobData.currentChapterIndex = i;
 
-        if (jobData.currentChapterStep < 1) {
-          await updateJob(1, `Starting Chapter ${chapter} - Extracting plot`);
-          const res = await runAgy(`Extract the plot for Chapter ${chapter} from the outline.`);
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_plot`, res.stdout);
-          jobData.currentChapterStep = 1;
-        }
+        const chapterPayload = { ...payload, chapter, pov, tense };
 
-        if (jobData.currentChapterStep < 2) {
-          await updateJob(2, `Chapter ${chapter}: Plot Scene Brief`);
-          const res = await runAgy("Break the chapter plot into smaller beats.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_beats`, res.stdout);
-          jobData.currentChapterStep = 2;
-        }
+        for (let s = jobData.currentChapterStep; s < subagentCount; s++) {
+          const subTask = subagents[s];
+          jobData.currentChapterStep = s;
 
-        if (jobData.currentChapterStep < 3) {
-          await updateJob(3, `Chapter ${chapter}: Character Scene Brief`);
-          const res = await runAgy("Detail character goals and emotional states for this scene.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_characters_brief`, res.stdout);
-          jobData.currentChapterStep = 3;
-        }
+          const subagentTmpl = await Template.findOne({ id: subTask.subagentTemplateId });
+          if (!subagentTmpl) {
+            throw new Error(`Subagent template not found: ${subTask.subagentTemplateId}`);
+          }
 
-        if (jobData.currentChapterStep < 4) {
-          await updateJob(4, `Chapter ${chapter}: Worldbuilding Scene Brief`);
-          const res = await runAgy("Detail the setting and environment for this scene.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_setting_brief`, res.stdout);
-          jobData.currentChapterStep = 4;
-        }
+          const progressPct = ((i * subagentCount + s) / (chapters.length * subagentCount)) * 0.95 + 0.05;
+          await updateJob(progressPct, `Chapter ${chapter}: ${subagentTmpl.name}...`);
 
-        if (jobData.currentChapterStep < 5) {
-          await updateJob(5, `Chapter ${chapter}: Chronology Check 1`);
-          const res = await runAgy("Ensure the brief is consistent with the overall timeline.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_chronology_check`, res.stdout);
-          jobData.currentChapterStep = 5;
-        }
+          // Fetch only declared subagent context type inputs
+          const subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
 
-        if (jobData.currentChapterStep < 6) {
-          await updateJob(6, `Chapter ${chapter}: Plot Scene Rewrite`);
-          const res = await runAgy("Adjust the plot brief based on chronology.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_plot_revised`, res.stdout);
-          jobData.currentChapterStep = 6;
-        }
+          // Interpolate variables
+          const taskPrompt = interpolateString(subagentTmpl.content || '', chapterPayload);
+          const outputId = interpolateString(subTask.outputId, chapterPayload);
 
-        if (jobData.currentChapterStep < 7) {
-          await updateJob(7, `Chapter ${chapter}: Character & World Rewrite`);
-          const res = await runAgy("Adjust character and world briefs based on chronology.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_briefs_revised`, res.stdout);
-          jobData.currentChapterStep = 7;
-        }
+          let subagentPrompt = `Subagent Task: ${subagentTmpl.name}\nInstructions:\n${taskPrompt}\n\n`;
+          if (subContext) {
+            subagentPrompt += `Context:\n${subContext}\n\n`;
+          }
+          if (previousOutput) {
+            subagentPrompt += `[Input from previous step]:\n${previousOutput}\n\n`;
+          }
+          subagentPrompt += `Output the result directly.`;
 
-        if (jobData.currentChapterStep < 9) {
-          await updateJob(9, `Chapter ${chapter}: First Draft`);
-          const res = await runAgy(`Write the prose for the chapter using ${pov} and ${tense}.`);
-          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
-          jobData.currentChapterStep = 9;
-        }
+          const subResult = await runAgy(subagentPrompt, true, subagentTmpl.model, subagentTmpl.thinkingLevel);
+          await saveArtifact(jobData.projectId, subTask.outputType, outputId, subResult.stdout, parseInt(chapter) || 999);
 
-        if (jobData.currentChapterStep < 10) {
-          await updateJob(10, `Chapter ${chapter}: Chronology Check 2`);
-          const res = await runAgy("Check the written prose for timeline errors.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_chronology_check_2`, res.stdout);
-          jobData.currentChapterStep = 10;
+          previousOutput = subResult.stdout;
         }
-
-        if (jobData.currentChapterStep < 11) {
-          await updateJob(11, `Chapter ${chapter}: Style Check`);
-          const res = await runAgy("Ensure the prose matches the genre style guide.");
-          await saveArtifact(jobData.projectId, 'note', `chapter_${chapter}_style_check`, res.stdout);
-          jobData.currentChapterStep = 11;
-        }
-
-        if (jobData.currentChapterStep < 12) {
-          await updateJob(12, `Chapter ${chapter}: Rewrite`);
-          const res = await runAgy("Adjust the prose based on style and chronology checks.");
-          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
-          jobData.currentChapterStep = 12;
-        }
-
-        if (jobData.currentChapterStep < 13) {
-          const isLastChapter = (i === chapters.length - 1);
-          const res = await runAgy("Provide any final prose polish if needed, or return the final prose.");
-          await saveArtifact(jobData.projectId, 'chapter', `chapter-${chapter}`, res.stdout, parseInt(chapter) || 999);
-          await updateJob(13, `Chapter ${chapter}: Final Draft`, isLastChapter ? 'complete' : 'running');
-          jobData.currentChapterStep = 0; // reset step for the next chapter
-        }
+        jobData.currentChapterStep = 0; // reset for the next chapter
       }
+
+      await updateJob(1.0, `Finished Chapter Generation`, 'complete');
+
+    } else {
+      // --- Dynamic Execution: Standard Single Asset Workflow (e.g. Dossier, Outline) ---
+      let previousOutput = '';
+
+      if (jobData.currentStep < 1) {
+        await updateJob(0.02, `Initializing workflow: ${template.name}...`);
+        
+        // Resolve parent Agent global context
+        const agentContext = await resolveContextData(jobData.projectId, template.contextTypes || []);
+        
+        let initialPrompt = `You are the ${template.name}. Analyze the project context and generate a high-level plan or overview.\n\nContext:\n${agentContext}`;
+        if (jobData.type === 'braindump_to_dossier' && payload && payload.braindump) {
+          initialPrompt += `\n\nUser Braindump:\n${payload.braindump}\nGenre: ${payload.genre || 'Science Fiction'}`;
+        }
+
+        const planResult = await runAgy(initialPrompt, false, template.model, template.thinkingLevel);
+        await saveArtifact(jobData.projectId, 'note', `${template.id}_plan`, planResult.stdout);
+        previousOutput = planResult.stdout;
+        
+        jobData.currentStep = 1;
+      }
+
+      for (let s = jobData.currentStep - 1; s < subagentCount; s++) {
+        const subTask = subagents[s];
+        jobData.currentStep = s + 2; // Step index offset: 1 (Main Agent) + 1 (1-indexed offset)
+
+        const subagentTmpl = await Template.findOne({ id: subTask.subagentTemplateId });
+        if (!subagentTmpl) {
+          throw new Error(`Subagent template not found: ${subTask.subagentTemplateId}`);
+        }
+
+        const progressPct = ((s + 1) / subagentCount) * 0.9 + 0.1;
+        await updateJob(progressPct, `Step ${s + 1}/${subagentCount}: ${subagentTmpl.name}...`);
+
+        // Fetch only subagent context type inputs
+        const subContext = await resolveContextData(jobData.projectId, subTask.contextInputs || []);
+
+        // Interpolate variables
+        const taskPrompt = interpolateString(subagentTmpl.content || '', payload);
+        const outputId = interpolateString(subTask.outputId, payload);
+
+        let subagentPrompt = `Subagent Task: ${subagentTmpl.name}\nInstructions:\n${taskPrompt}\n\n`;
+        if (subContext) {
+          subagentPrompt += `Context:\n${subContext}\n\n`;
+        }
+        if (previousOutput) {
+          subagentPrompt += `[Input from previous step]:\n${previousOutput}\n\n`;
+        }
+        subagentPrompt += `Output the result directly.`;
+
+        const subResult = await runAgy(subagentPrompt, true, subagentTmpl.model, subagentTmpl.thinkingLevel);
+        await saveArtifact(jobData.projectId, subTask.outputType, outputId, subResult.stdout);
+
+        previousOutput = subResult.stdout;
+      }
+
+      await updateJob(1.0, `Finished ${template.name}`, 'complete');
     }
+
   } catch (e) {
     console.error('Job Error:', e);
     await updateJob(jobData.progress, `Error: ${e.message}`, 'error');
