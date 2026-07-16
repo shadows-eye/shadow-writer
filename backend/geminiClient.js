@@ -8,9 +8,8 @@ const auth = new GoogleAuth({
 });
 
 async function getAccessToken() {
-  const client = await auth.getClient();
-  const headers = await client.getRequestHeaders();
-  return headers.Authorization;
+  const token = await auth.getAccessToken();
+  return `Bearer ${token}`;
 }
 
 /**
