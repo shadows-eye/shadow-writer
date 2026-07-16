@@ -41,7 +41,7 @@ const TemplateSchema = new mongoose.Schema({
     step: Number,
     subagentTemplateId: String, // References a Template ID of type 'Subagent'
     contextInputs: [{ type: String }],
-    outputType: { type: String, default: 'note', enum: ['note', 'chapter', 'character'] },
+    outputType: { type: String, default: 'note', enum: ['note', 'chapter', 'character', 'artifact'] },
     outputId: String
   }],
   overrides: { type: Map, of: String },
