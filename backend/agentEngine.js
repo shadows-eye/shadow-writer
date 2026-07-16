@@ -370,6 +370,13 @@ async function runAutomationLoop(jobId, jobData, payload) {
   jobData.chatHistory = jobData.chatHistory || [];
   jobData.currentStep = jobData.currentStep || 0;
 
+  if (jobData.type === 'template_generator' && payload && payload.templateName) {
+    const cleanName = payload.templateName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    if (cleanName.includes('template-generator') || payload.templateName.toLowerCase().includes('template generator')) {
+      throw new Error('Generating Template Generator templates is not allowed');
+    }
+  }
+
   const updateJob = async (progress, log, status = 'running') => {
     if (progress !== null && progress !== undefined) {
       jobData.progress = progress;
