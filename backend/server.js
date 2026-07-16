@@ -528,11 +528,12 @@ app.post('/api/characters/:id', async (req, res) => {
 
     // Save to History
     await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
       projectId: pId,
       type: 'manual_edit',
       status: 'complete',
       progress: 1.0,
-      log: `Update character: ${id}`
+      logs: [`Update character: ${id}`]
     });
 
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
@@ -598,7 +599,7 @@ app.get('/api/notes', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const list = await Note.find({ projectId: pId });
+    const list = await Note.find({ projectId: pId, type: { $ne: 'artifact' } });
     const formatted = list.map(n => ({ id: n.id, content: n.content, name: n.name, type: n.type, attributes: n.attributes }));
     res.json({ notes: formatted });
   } catch (err) {
@@ -655,11 +656,12 @@ app.delete('/api/notes/:id', async (req, res) => {
 
     // Save to History
     await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
       projectId: pId,
       type: 'manual_edit',
       status: 'complete',
       progress: 1.0,
-      log: `Delete note: ${id}`
+      logs: [`Delete note: ${id}`]
     });
 
     res.json({ success: true });
