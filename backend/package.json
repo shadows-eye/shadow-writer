@@ -16,6 +16,7 @@
     "docx": "^8.2.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-auth-library": "^10.9.0",
     "mongoose": "^8.24.1",
     "simple-git": "^3.36.0"
   }

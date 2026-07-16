@@ -3,6 +3,8 @@ const router = express.Router();
 const crypto = require('crypto');
 const path = require('path');
 
+const { generateContent } = require('./geminiClient');
+
 const { jobs, execAsync } = require('./server');
 const { Project, Template, History, Note, Chapter, Character, ContextFile, extractAttributesAndContent } = require('./mongoDB');
 
@@ -289,39 +291,18 @@ async function runAutomationLoop(jobId, jobData, payload) {
 
   try {
     const runAgy = async (prompt, isSubagent = true, modelOverride = null, thinkingOverride = null) => {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY is not defined in environment');
-      }
       try {
-        const payloadToSend = {
+        const responseText = await generateContent({
           message: prompt,
           isSubagent,
-          jobId,
-          chatHistory: jobData.chatHistory,
-          model: modelOverride || (isSubagent ? 'gemini-3.1-flash-lite' : 'gemini-3.5-flash'),
-          thinkingLevel: thinkingOverride || (isSubagent ? 'low' : 'high')
-        };
-
-        const res = await fetch('http://app:5000/admin/api/internal/ai/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': process.env.GEMINI_API_KEY
-          },
-          body: JSON.stringify(payloadToSend)
+          model: modelOverride,
+          thinkingLevel: thinkingOverride
         });
-        if (res.ok) {
-          const json = await res.json();
-          const responseText = json.response || json.reply;
-          jobData.chatHistory.push({ role: 'user', content: prompt });
-          jobData.chatHistory.push({ role: 'model', content: responseText });
-          return { stdout: responseText, stderr: '' };
-        } else {
-          const txt = await res.text();
-          throw new Error(`Internal AI Chat error: ${txt}`);
-        }
+        jobData.chatHistory.push({ role: 'user', content: prompt });
+        jobData.chatHistory.push({ role: 'model', content: responseText });
+        return { stdout: responseText, stderr: '' };
       } catch (e) {
-        console.error("Failed to call internal AI chat:", e);
+        console.error("Failed to call direct Gemini chat:", e);
         throw e;
       }
     };
