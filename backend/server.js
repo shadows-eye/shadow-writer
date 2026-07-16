@@ -113,11 +113,11 @@ app.get('/api/projects', async (req, res) => {
 });
 
 app.post('/api/projects', async (req, res) => {
-  const { id, name, folderPath, templates, writingPOV, writingTense } = req.body;
+  const { id, name, folderPath, templates, writingPOV, writingTense, genre } = req.body;
   if (!id || !name || !folderPath) return res.status(400).json({ error: 'Missing fields' });
 
   try {
-    const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '' };
+    const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '', genre: genre || 'Romantic Suspense' };
     await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
     res.json({ success: true, project: newProject });
   } catch (error) {
@@ -338,6 +338,13 @@ app.post('/api/templates', async (req, res) => {
   const isOverride = userRole !== 'admin';
 
   try {
+    if (templateType === 'Dossier') {
+      const existingDossier = await Template.findOne({ templateType: 'Dossier', genre, id: { $ne: id } });
+      if (existingDossier) {
+        return res.status(400).json({ error: `A Dossier template already exists for the "${genre}" genre ("${existingDossier.name}"). You cannot create more than one per genre.` });
+      }
+    }
+
     let t = await Template.findOne({ id });
     if (t) {
       if (isOverride && userId) {

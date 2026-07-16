@@ -21,7 +21,8 @@ const ProjectSchema = new mongoose.Schema({
   folderPath: String,
   templates: [String],
   writingPOV: String,
-  writingTense: String
+  writingTense: String,
+  genre: String
 });
 const Project = mongoose.model('Project', ProjectSchema);
 
