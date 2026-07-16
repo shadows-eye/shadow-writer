@@ -122,6 +122,18 @@ const NoteSchema = new mongoose.Schema({
 NoteSchema.index({ projectId: 1, id: 1 }, { unique: true });
 const Note = mongoose.model('Note', NoteSchema);
 
+const ArtifactSchema = new mongoose.Schema({
+  projectId: { type: String, required: true },
+  id: { type: String, required: true },
+  name: String,
+  type: { type: String, default: 'artifact' },
+  attributes: { type: Map, of: mongoose.Schema.Types.Mixed },
+  content: String,
+  lastEdited: { type: Date, default: Date.now }
+});
+ArtifactSchema.index({ projectId: 1, id: 1 }, { unique: true });
+const Artifact = mongoose.model('Artifact', ArtifactSchema);
+
 const ContextFileSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   destination: { type: String, required: true },
@@ -432,5 +444,6 @@ module.exports = {
   Chapter,
   Character,
   Note,
+  Artifact,
   ContextFile
 };

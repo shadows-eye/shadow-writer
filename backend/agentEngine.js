@@ -6,7 +6,7 @@ const path = require('path');
 const { generateContent } = require('./geminiClient');
 
 const { jobs, execAsync } = require('./server');
-const { Project, Template, History, Note, Chapter, Character, ContextFile, extractAttributesAndContent } = require('./mongoDB');
+const { Project, Template, History, Note, Chapter, Character, Artifact, ContextFile, extractAttributesAndContent } = require('./mongoDB');
 
 // Helper to replace variable placeholders in prompts or paths
 function interpolateString(str, payload) {
@@ -46,6 +46,10 @@ async function resolveContextData(projectId, contextList) {
       if (notes.length > 0) {
         contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${n.content}`).join('\n\n') + '\n';
       }
+      const artifacts = await Artifact.find({ projectId }).lean();
+      if (artifacts.length > 0) {
+        contextStr += '\n[Project Artifacts]\n' + artifacts.map(a => `--- Artifact: ${a.name || a.id} ---\n${a.content}`).join('\n\n') + '\n';
+      }
     }
     else if (ctx === 'dossier') {
       const dossierNote = await Note.findOne({ projectId, id: 'dossier' }).lean();
@@ -53,8 +57,10 @@ async function resolveContextData(projectId, contextList) {
         contextStr += `\n[Project Dossier]\n${dossierNote.content}\n`;
       } else {
         const dossierNotes = await Note.find({ projectId, id: /dossier/i }).lean();
-        if (dossierNotes.length > 0) {
-          contextStr += '\n[Project Dossier]\n' + dossierNotes.map(n => n.content).join('\n\n') + '\n';
+        const dossierArtifacts = await Artifact.find({ projectId, id: /dossier/i }).lean();
+        const allDossiers = [...dossierNotes, ...dossierArtifacts];
+        if (allDossiers.length > 0) {
+          contextStr += '\n[Project Dossier]\n' + allDossiers.map(d => d.content).join('\n\n') + '\n';
         }
       }
     }
@@ -91,6 +97,13 @@ async function saveArtifact(projectId, type, id, content, orderIndex = null) {
       await Character.findOneAndUpdate(
         { projectId, id },
         { name, content: cleanContent, attributes, lastEdited: new Date() },
+        { upsert: true }
+      );
+    } else if (type === 'artifact') {
+      const name = attributes.name || id;
+      await Artifact.findOneAndUpdate(
+        { projectId, id },
+        { name, type: 'artifact', content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     } else {
@@ -402,7 +415,7 @@ async function runAutomationLoop(jobId, jobData, payload) {
         }
 
         const planResult = await runAgy(initialPrompt, false, template.model, template.thinkingLevel);
-        await saveArtifact(jobData.projectId, 'note', `${template.id}_plan`, planResult.stdout);
+        await saveArtifact(jobData.projectId, 'artifact', `${template.id}_plan`, planResult.stdout);
         previousOutput = planResult.stdout;
         
         jobData.currentStep = 1;
