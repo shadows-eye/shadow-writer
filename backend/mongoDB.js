@@ -272,20 +272,32 @@ async function seedDatabaseIfEmpty() {
     }
   }
 
-  // 2. Seed Projects
-  const projectCount = await Project.countDocuments();
-  if (projectCount === 0) {
-    const projectsPath = path.join(__dirname, 'db', 'projects.json');
-    if (fs.existsSync(projectsPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(projectsPath, 'utf8'));
-        if (data && data.length > 0) {
-          await Project.insertMany(data);
-          console.log(`✓ Auto-seeded ${data.length} projects into MongoDB.`);
+  // 2. Sync Projects (using upsert by id so updates propagate)
+  const projectsPath = path.join(__dirname, 'db', 'projects.json');
+  if (fs.existsSync(projectsPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(projectsPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          await Project.findOneAndUpdate(
+            { id: item.id },
+            {
+              $set: {
+                name: item.name,
+                folderPath: item.folderPath,
+                templates: item.templates || [],
+                writingPOV: item.writingPOV,
+                writingTense: item.writingTense,
+                genre: item.genre
+              }
+            },
+            { upsert: true, new: true }
+          );
         }
-      } catch (err) {
-        console.error('Failed to auto-seed projects:', err);
+        console.log(`✓ Synchronized ${data.length} projects from projects.json into MongoDB.`);
       }
+    } catch (err) {
+      console.error('Failed to sync projects:', err);
     }
   }
 

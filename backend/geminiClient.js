@@ -123,11 +123,7 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
  */
 async function runQualityGate(draftContent, token, isVertex = false) {
   console.log("Running Quality Gate (gemini-3.1-pro-preview)...");
-  const systemInstruction = (
-    "You are an expert editor and quality gate. Your job is to review the draft content, "
-    "verify logical consistency, correct any style and formatting issues, and output "
-    "the polished, final version of the text. Do not include explanations, just the final content."
-  );
+  const systemInstruction = `You are an expert editor and quality gate. Your job is to review the draft content, verify logical consistency, correct any style and formatting issues, and output the polished, final version of the text. Do not include explanations, just the final content.`;
   
   const contents = [
     { role: 'user', parts: [{ text: `Context: Subagent step completion verification\nDraft:\n"""\n${draftContent}\n"""` }] }
