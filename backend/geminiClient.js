@@ -27,7 +27,8 @@ async function countTokens(model, message, token, isVertex = false) {
       headers['Authorization'] = token;
     } else {
       const apiKey = process.env.GEMINI_API_KEY;
-      url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:countTokens?key=${apiKey}`;
+      url = `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}:countTokens`;
+      headers['x-goog-api-key'] = apiKey;
     }
 
     const payload = {
@@ -43,9 +44,18 @@ async function countTokens(model, message, token, isVertex = false) {
     if (res.ok) {
       const data = await res.json();
       return data.totalTokens || 0;
+    } else {
+      if (isVertex && (res.status === 404 || res.status === 403) && process.env.GEMINI_API_KEY) {
+        console.warn(`Vertex AI token count returned ${res.status}. Falling back to Vertex AI API Key...`);
+        return await countTokens(model, message, null, false);
+      }
     }
   } catch (e) {
     console.error("Token counting failed:", e);
+    if (isVertex && process.env.GEMINI_API_KEY) {
+      console.warn("Retrying token count via Vertex AI API Key fallback...");
+      return await countTokens(model, message, null, false);
+    }
   }
   return 0;
 }
@@ -64,7 +74,8 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
     headers['Authorization'] = token;
   } else {
     const apiKey = process.env.GEMINI_API_KEY;
-    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    url = `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}:generateContent`;
+    headers['x-goog-api-key'] = apiKey;
   }
 
   let payload = {
@@ -96,6 +107,10 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
 
       if (!res.ok) {
         const errText = await res.text();
+        if (isVertex && (res.status === 404 || res.status === 403) && process.env.GEMINI_API_KEY) {
+          console.warn(`Vertex AI call returned ${res.status}. Falling back to Vertex AI API Key...`);
+          return await callGenerateContent(model, contents, config, null, false);
+        }
         if (res.status === 429 && attempt < 2) {
           console.warn(`429 Resource Exhausted. Retrying in ${2 * (attempt + 1)}s...`);
           await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
@@ -111,6 +126,10 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
       throw new Error(`Unexpected API response structure: ${JSON.stringify(data)}`);
     } catch (err) {
       lastError = err;
+      if (isVertex && process.env.GEMINI_API_KEY) {
+        console.warn("Vertex AI invocation caught error. Retrying via Google AI Studio fallback...", err.message);
+        return await callGenerateContent(model, contents, config, null, false);
+      }
       if (attempt >= 2) throw err;
     }
   }
