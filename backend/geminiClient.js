@@ -22,8 +22,20 @@ async function countTokens(model, message, token, isVertex = false) {
     
     if (isVertex) {
       const project = process.env.GOOGLE_CLOUD_PROJECT || 'shadowai-497012';
-      const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
-      url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:countTokens`;
+      let location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+      let host;
+      if (location === 'us' || location === 'eu') {
+        host = `aiplatform.${location}.rep.googleapis.com`;
+      } else if (location.startsWith('us-')) {
+        location = 'us';
+        host = `aiplatform.us.rep.googleapis.com`;
+      } else if (location.startsWith('europe-') || location.startsWith('eu-')) {
+        location = 'eu';
+        host = `aiplatform.eu.rep.googleapis.com`;
+      } else {
+        host = `${location}-aiplatform.googleapis.com`;
+      }
+      url = `https://${host}/v1beta1/projects/${project}/locations/${location}/publishers/google/models/${model}:countTokens`;
       headers['Authorization'] = token;
     } else {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -69,8 +81,20 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
 
   if (isVertex) {
     const project = process.env.GOOGLE_CLOUD_PROJECT || 'shadowai-497012';
-    const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
-    url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`;
+    let location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+    let host;
+    if (location === 'us' || location === 'eu') {
+      host = `aiplatform.${location}.rep.googleapis.com`;
+    } else if (location.startsWith('us-')) {
+      location = 'us';
+      host = `aiplatform.us.rep.googleapis.com`;
+    } else if (location.startsWith('europe-') || location.startsWith('eu-')) {
+      location = 'eu';
+      host = `aiplatform.eu.rep.googleapis.com`;
+    } else {
+      host = `${location}-aiplatform.googleapis.com`;
+    }
+    url = `https://${host}/v1beta1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`;
     headers['Authorization'] = token;
   } else {
     const apiKey = process.env.GEMINI_API_KEY;
