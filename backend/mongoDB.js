@@ -251,7 +251,7 @@ function extractAttributesAndContent(content) {
 
 async function seedDatabaseIfEmpty() {
   // 1. Sync Templates (using upsert by id so updates propagate)
-  const templatesPath = path.join(__dirname, 'db', 'templates.json');
+  const templatesPath = path.join(__dirname, 'public', 'templates.json');
   if (fs.existsSync(templatesPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
@@ -285,7 +285,7 @@ async function seedDatabaseIfEmpty() {
   }
 
   // 2. Sync Projects (using upsert by id so updates propagate)
-  const projectsPath = path.join(__dirname, 'db', 'projects.json');
+  const projectsPath = path.join(__dirname, 'public', 'projects.json');
   if (fs.existsSync(projectsPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(projectsPath, 'utf8'));
@@ -316,7 +316,7 @@ async function seedDatabaseIfEmpty() {
   // 3. Seed Character Elements
   const charCount = await CharacterElement.countDocuments();
   if (charCount === 0) {
-    const charPath = path.join(__dirname, 'db', 'characterElements.json');
+    const charPath = path.join(__dirname, 'public', 'characterElements.json');
     if (fs.existsSync(charPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(charPath, 'utf8'));
@@ -333,7 +333,7 @@ async function seedDatabaseIfEmpty() {
   // 4. Seed History
   const historyCount = await History.countDocuments();
   if (historyCount === 0) {
-    const historyPath = path.join(__dirname, 'db', 'history.json');
+    const historyPath = path.join(__dirname, 'public', 'history.json');
     if (fs.existsSync(historyPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(historyPath, 'utf8'));

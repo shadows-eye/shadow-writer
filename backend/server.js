@@ -350,6 +350,7 @@ app.post('/api/templates', async (req, res) => {
       if (isOverride && userId) {
         if (!t.overrides) t.overrides = new Map();
         t.overrides.set(userId, content);
+        t.markModified('overrides');
       } else {
         t.name = name;
         t.genre = genre;
@@ -395,9 +396,14 @@ app.delete('/api/templates/:id', async (req, res) => {
       let t = await Template.findOne({ id });
       if (t && t.overrides) {
         t.overrides.delete(userId);
+        t.markModified('overrides');
         await t.save();
       }
     } else {
+      let t = await Template.findOne({ id });
+      if (t && t.genre === 'General') {
+        return res.status(400).json({ error: 'System templates in the General genre cannot be deleted.' });
+      }
       await Template.deleteOne({ id });
     }
     res.json({ success: true });

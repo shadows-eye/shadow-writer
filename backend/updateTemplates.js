@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const { Template } = require('./mongoDB');
 
 async function main() {
-  const templatesPath = path.join(__dirname, 'db', 'templates.json');
+  const templatesPath = path.join(__dirname, 'public', 'templates.json');
   if (!fs.existsSync(templatesPath)) {
     console.error('templates.json not found');
     process.exit(1);
