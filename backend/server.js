@@ -3,7 +3,21 @@ const cors = require('cors');
 const path = require('path');
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = process.env.ALLOWED_CORS_ORIGINS
+  ? process.env.ALLOWED_CORS_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5000', 'http://127.0.0.1:5000'];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    return callback(new Error('CORS policy does not allow access from this origin.'), false);
+  },
+  credentials: true
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
@@ -51,8 +65,8 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
     const apiKey = req.headers['x-api-key'];
     const expectedKey = process.env.MCP_API_KEY;
-    if (expectedKey && apiKey !== expectedKey) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+    if (!expectedKey || apiKey !== expectedKey) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid or missing API Key' });
     }
   }
   next();
