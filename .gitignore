@@ -4,3 +4,6 @@ dist/
 build/
 backend/novels/
 .DS_Store
+
+# Ignore MongoDB database files completely
+backend/db/

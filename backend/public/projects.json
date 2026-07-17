@@ -1,0 +1,36 @@
+[
+  {
+    "id": "the-beginning-of-the-end",
+    "name": "The Begining of the End",
+    "folderPath": "/home/shadow/Documents/AllianceRPG/The Begining of the End",
+    "genre": "Science Fiction",
+    "templates": [
+      "genre_trope_identifier",
+      "pitch_brainstormer",
+      "pitch_evaluator",
+      "pitch_formatter",
+      "dossier_outline_builder",
+      "dossier_emotional_critiquer",
+      "dossier_logic_critiquer",
+      "character_names_reviewer",
+      "dossier_compiler",
+      "outline_act_expander",
+      "outline_placements_planner",
+      "outline_compiler",
+      "chapter_plot_extractor",
+      "chapter_beats_builder",
+      "chapter_character_briefer",
+      "chapter_setting_briefer",
+      "chapter_chronology_checker_1",
+      "chapter_plot_reviser",
+      "chapter_prose_drafter",
+      "chapter_chronology_checker_2",
+      "chapter_style_guide_auditor",
+      "chapter_prose_reviser",
+      "chapter_final_polisher",
+      "dossier",
+      "outline",
+      "chapter_generator"
+    ]
+  }
+]

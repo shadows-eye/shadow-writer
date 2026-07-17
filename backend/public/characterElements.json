@@ -1,0 +1,51 @@
+[
+  {
+    "id": "species",
+    "name": "Species",
+    "type": "string",
+    "prefix": "- **Species**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "age",
+    "name": "Age",
+    "type": "number",
+    "prefix": "- **Age**: ",
+    "suffix": " cycles\n"
+  },
+  {
+    "id": "rank",
+    "name": "Rank/Clearance",
+    "type": "string",
+    "prefix": "- **Rank/Clearance**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "physical_desc",
+    "name": "Physical Description",
+    "type": "string",
+    "prefix": "- **Physical Description**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "background",
+    "name": "Background & Role",
+    "type": "textarea",
+    "prefix": "\n## Background & Role\n",
+    "suffix": "\n"
+  },
+  {
+    "id": "conflict",
+    "name": "Novel Conflict",
+    "type": "textarea",
+    "prefix": "\n## Conflict\n",
+    "suffix": "\n"
+  },
+  {
+    "id": "key_relationships",
+    "name": "Key Relationships",
+    "type": "textarea",
+    "prefix": "\n## Key Relationships\n",
+    "suffix": "\n"
+  }
+]
