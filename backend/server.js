@@ -123,15 +123,42 @@ app.get('/api/project-status', async (req, res) => {
 });
 
 app.get('/api/projects', async (req, res) => {
-  res.json({ projects: await Project.find({}).lean() });
+  const userId = req.headers['x-user-id'];
+  const userEmail = req.headers['x-user-email'];
+  const userRole = req.headers['x-user-role'];
+
+  let query = {};
+  if (userRole !== 'admin') {
+    const filters = [];
+    if (userId) filters.push({ userId });
+    if (userEmail) filters.push({ userEmail });
+    filters.push({ userId: { $exists: false }, userEmail: { $exists: false } });
+    filters.push({ userId: '', userEmail: '' });
+    query = { $or: filters };
+  }
+
+  res.json({ projects: await Project.find(query).lean() });
 });
 
 app.post('/api/projects', async (req, res) => {
   const { id, name, folderPath, templates, writingPOV, writingTense, genre } = req.body;
+  const userId = req.headers['x-user-id'] || '';
+  const userEmail = req.headers['x-user-email'] || '';
+
   if (!id || !name) return res.status(400).json({ error: 'Missing fields: id and name are required' });
 
   try {
-    const newProject = { id, name, folderPath: folderPath || '', templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '', genre: genre || 'Science Fiction' };
+    const newProject = {
+      id,
+      name,
+      userId,
+      userEmail,
+      folderPath: folderPath || '',
+      templates: templates || [],
+      writingPOV: writingPOV || '',
+      writingTense: writingTense || '',
+      genre: genre || 'Science Fiction'
+    };
     await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
     res.json({ success: true, project: newProject });
   } catch (error) {

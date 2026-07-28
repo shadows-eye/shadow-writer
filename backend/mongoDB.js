@@ -18,6 +18,8 @@ mongoose.connect(mongoUri)
 const ProjectSchema = new mongoose.Schema({
   id: { type: String, unique: true, required: true },
   name: String,
+  userId: String,
+  userEmail: String,
   folderPath: String,
   templates: [String],
   writingPOV: String,
@@ -296,6 +298,8 @@ async function seedDatabaseIfEmpty() {
             {
               $set: {
                 name: item.name,
+                userId: item.userId || '',
+                userEmail: item.userEmail || '',
                 folderPath: item.folderPath || '',
                 templates: item.templates || [],
                 writingPOV: item.writingPOV || '',
