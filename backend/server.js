@@ -128,10 +128,10 @@ app.get('/api/projects', async (req, res) => {
 
 app.post('/api/projects', async (req, res) => {
   const { id, name, folderPath, templates, writingPOV, writingTense, genre } = req.body;
-  if (!id || !name || !folderPath) return res.status(400).json({ error: 'Missing fields' });
+  if (!id || !name) return res.status(400).json({ error: 'Missing fields: id and name are required' });
 
   try {
-    const newProject = { id, name, folderPath, templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '', genre: genre || 'Romantic Suspense' };
+    const newProject = { id, name, folderPath: folderPath || '', templates: templates || [], writingPOV: writingPOV || '', writingTense: writingTense || '', genre: genre || 'Science Fiction' };
     await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
     res.json({ success: true, project: newProject });
   } catch (error) {
