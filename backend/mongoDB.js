@@ -296,11 +296,11 @@ async function seedDatabaseIfEmpty() {
             {
               $set: {
                 name: item.name,
-                folderPath: item.folderPath,
+                folderPath: item.folderPath || '',
                 templates: item.templates || [],
-                writingPOV: item.writingPOV,
-                writingTense: item.writingTense,
-                genre: item.genre
+                writingPOV: item.writingPOV || '',
+                writingTense: item.writingTense || '',
+                genre: item.genre || 'Science Fiction'
               }
             },
             { upsert: true, new: true }
@@ -313,7 +313,67 @@ async function seedDatabaseIfEmpty() {
     }
   }
 
-  // 3. Seed Character Elements
+  // 3. Sync Chapters
+  const chaptersPath = path.join(__dirname, 'public', 'chapters.json');
+  if (fs.existsSync(chaptersPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(chaptersPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          await Chapter.findOneAndUpdate(
+            { projectId: item.projectId, id: item.id },
+            { $set: item },
+            { upsert: true, new: true }
+          );
+        }
+        console.log(`✓ Synchronized ${data.length} chapters from chapters.json into MongoDB.`);
+      }
+    } catch (err) {
+      console.error('Failed to sync chapters:', err);
+    }
+  }
+
+  // 4. Sync Characters
+  const charactersPath = path.join(__dirname, 'public', 'characters.json');
+  if (fs.existsSync(charactersPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(charactersPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          await Character.findOneAndUpdate(
+            { projectId: item.projectId, id: item.id },
+            { $set: item },
+            { upsert: true, new: true }
+          );
+        }
+        console.log(`✓ Synchronized ${data.length} characters from characters.json into MongoDB.`);
+      }
+    } catch (err) {
+      console.error('Failed to sync characters:', err);
+    }
+  }
+
+  // 5. Sync Notes
+  const notesPath = path.join(__dirname, 'public', 'notes.json');
+  if (fs.existsSync(notesPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          await Note.findOneAndUpdate(
+            { projectId: item.projectId, id: item.id },
+            { $set: item },
+            { upsert: true, new: true }
+          );
+        }
+        console.log(`✓ Synchronized ${data.length} notes from notes.json into MongoDB.`);
+      }
+    } catch (err) {
+      console.error('Failed to sync notes:', err);
+    }
+  }
+
+  // 6. Seed Character Elements
   const charCount = await CharacterElement.countDocuments();
   if (charCount === 0) {
     const charPath = path.join(__dirname, 'public', 'characterElements.json');
