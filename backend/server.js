@@ -370,6 +370,25 @@ app.get('/api/templates', async (req, res) => {
   }
 });
 
+app.get('/api/templates/:id', async (req, res) => {
+  const { id } = req.params;
+  const userId = req.headers['x-user-id'];
+
+  try {
+    const t = await Template.findOne({ id }).lean();
+    if (!t) return res.status(404).json({ error: 'Template not found' });
+
+    if (userId && t.overrides && (t.overrides[userId] || (t.overrides instanceof Map && t.overrides.get(userId)))) {
+      const val = t.overrides instanceof Map ? t.overrides.get(userId) : t.overrides[userId];
+      return res.json({ ...t, content: val, isOverride: true });
+    }
+    res.json({ ...t, isOverride: false });
+  } catch (err) {
+    console.error('Error fetching template by id:', err);
+    res.status(500).json({ error: 'Failed to fetch template' });
+  }
+});
+
 app.post('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const userRole = req.headers['x-user-role'] || 'creator';
@@ -651,6 +670,21 @@ app.get('/api/notes', async (req, res) => {
     res.json({ notes: formatted });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/notes/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  const pId = projectId || 'global';
+
+  try {
+    const note = await Note.findOne({ projectId: pId, id }).lean();
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    res.json({ id: note.id, name: note.name, content: note.content, type: note.type, attributes: note.attributes });
+  } catch (err) {
+    console.error('Error fetching single note:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
