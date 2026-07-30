@@ -252,128 +252,88 @@ function extractAttributesAndContent(content) {
 }
 
 async function seedDatabaseIfEmpty() {
-  // 1. Sync Templates (using upsert by id so updates propagate)
-  const templatesPath = path.join(__dirname, 'public', 'templates.json');
-  if (fs.existsSync(templatesPath)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-      if (data && data.length > 0) {
-        for (const item of data) {
-          // Sync except we preserve overrides if they exist
-          await Template.findOneAndUpdate(
-            { id: item.id },
-            { 
-              $set: {
-                name: item.name,
-                genre: item.genre,
-                templateType: item.templateType,
-                content: item.content,
-                templateBehavior: item.templateBehavior,
-                nextTemplateId: item.nextTemplateId || '',
-                model: item.model || 'gemini-3.5-flash',
-                thinkingLevel: item.thinkingLevel || 'high',
-                contextTypes: item.contextTypes || [],
-                subagents: item.subagents || []
-              }
-            },
-            { upsert: true, new: true }
-          );
+  // 1. Seed Templates if empty
+  const countTemplates = await Template.countDocuments();
+  if (countTemplates === 0) {
+    const templatesPath = path.join(__dirname, 'public', 'templates.json');
+    if (fs.existsSync(templatesPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
+        if (data && data.length > 0) {
+          await Template.insertMany(data);
+          console.log(`✓ Initialized ${data.length} templates from templates.json into MongoDB.`);
         }
-        console.log(`✓ Synchronized ${data.length} templates from templates.json into MongoDB.`);
+      } catch (err) {
+        console.error('Failed to seed templates:', err);
       }
-    } catch (err) {
-      console.error('Failed to sync templates:', err);
     }
   }
 
-  // 2. Sync Projects (using upsert by id so updates propagate)
-  const projectsPath = path.join(__dirname, 'public', 'projects.json');
-  if (fs.existsSync(projectsPath)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(projectsPath, 'utf8'));
-      if (data && data.length > 0) {
-        for (const item of data) {
-          await Project.findOneAndUpdate(
-            { id: item.id },
-            {
-              $set: {
-                name: item.name,
-                userId: item.userId || '',
-                userEmail: item.userEmail || '',
-                folderPath: item.folderPath || '',
-                templates: item.templates || [],
-                writingPOV: item.writingPOV || '',
-                writingTense: item.writingTense || '',
-                genre: item.genre || 'Science Fiction'
-              }
-            },
-            { upsert: true, new: true }
-          );
+  // 2. Seed Projects if empty
+  const countProjects = await Project.countDocuments();
+  if (countProjects === 0) {
+    const projectsPath = path.join(__dirname, 'public', 'projects.json');
+    if (fs.existsSync(projectsPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(projectsPath, 'utf8'));
+        if (data && data.length > 0) {
+          await Project.insertMany(data);
+          console.log(`✓ Initialized ${data.length} projects from projects.json into MongoDB.`);
         }
-        console.log(`✓ Synchronized ${data.length} projects from projects.json into MongoDB.`);
+      } catch (err) {
+        console.error('Failed to seed projects:', err);
       }
-    } catch (err) {
-      console.error('Failed to sync projects:', err);
     }
   }
 
-  // 3. Sync Chapters
-  const chaptersPath = path.join(__dirname, 'public', 'chapters.json');
-  if (fs.existsSync(chaptersPath)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(chaptersPath, 'utf8'));
-      if (data && data.length > 0) {
-        for (const item of data) {
-          await Chapter.findOneAndUpdate(
-            { projectId: item.projectId, id: item.id },
-            { $set: item },
-            { upsert: true, new: true }
-          );
+  // 3. Seed Chapters if empty
+  const countChapters = await Chapter.countDocuments();
+  if (countChapters === 0) {
+    const chaptersPath = path.join(__dirname, 'public', 'chapters.json');
+    if (fs.existsSync(chaptersPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(chaptersPath, 'utf8'));
+        if (data && data.length > 0) {
+          await Chapter.insertMany(data);
+          console.log(`✓ Initialized ${data.length} chapters from chapters.json into MongoDB.`);
         }
-        console.log(`✓ Synchronized ${data.length} chapters from chapters.json into MongoDB.`);
+      } catch (err) {
+        console.error('Failed to seed chapters:', err);
       }
-    } catch (err) {
-      console.error('Failed to sync chapters:', err);
     }
   }
 
-  // 4. Sync Characters
-  const charactersPath = path.join(__dirname, 'public', 'characters.json');
-  if (fs.existsSync(charactersPath)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(charactersPath, 'utf8'));
-      if (data && data.length > 0) {
-        for (const item of data) {
-          await Character.findOneAndUpdate(
-            { projectId: item.projectId, id: item.id },
-            { $set: item },
-            { upsert: true, new: true }
-          );
+  // 4. Seed Characters if empty
+  const countCharacters = await Character.countDocuments();
+  if (countCharacters === 0) {
+    const charactersPath = path.join(__dirname, 'public', 'characters.json');
+    if (fs.existsSync(charactersPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(charactersPath, 'utf8'));
+        if (data && data.length > 0) {
+          await Character.insertMany(data);
+          console.log(`✓ Initialized ${data.length} characters from characters.json into MongoDB.`);
         }
-        console.log(`✓ Synchronized ${data.length} characters from characters.json into MongoDB.`);
+      } catch (err) {
+        console.error('Failed to seed characters:', err);
       }
-    } catch (err) {
-      console.error('Failed to sync characters:', err);
     }
   }
 
-  // 5. Sync Notes
-  const notesPath = path.join(__dirname, 'public', 'notes.json');
-  if (fs.existsSync(notesPath)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
-      if (data && data.length > 0) {
-        for (const item of data) {
-          await Note.findOneAndUpdate(
-            { projectId: item.projectId, id: item.id },
-            { $set: item },
-            { upsert: true, new: true }
-          );
+  // 5. Seed Notes if empty
+  const countNotes = await Note.countDocuments();
+  if (countNotes === 0) {
+    const notesPath = path.join(__dirname, 'public', 'notes.json');
+    if (fs.existsSync(notesPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
+        if (data && data.length > 0) {
+          await Note.insertMany(data);
+          console.log(`✓ Initialized ${data.length} notes from notes.json into MongoDB.`);
         }
-        console.log(`✓ Synchronized ${data.length} notes from notes.json into MongoDB.`);
+      } catch (err) {
+        console.error('Failed to seed notes:', err);
       }
-    } catch (err) {
-      console.error('Failed to sync notes:', err);
     }
   }
 
