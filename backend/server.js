@@ -82,13 +82,27 @@ app.get('/api/project-status', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   try {
-    const dossierNote = await Note.findOne({ projectId: project.id, id: { $in: ['dossier', 'story_dossier'] } });
+    const dossierNote = await Note.findOne({
+      projectId: project.id,
+      $or: [
+        { id: { $in: ['dossier', 'story_dossier', 'final_dossier'] } },
+        { type: 'dossier' },
+        { name: /dossier/i }
+      ]
+    });
     const dossierFile = await ContextFile.findOne({ projectId: project.id, destination: 'worldbuilding', path: /dossier/i });
     const hasDossier = !!dossierNote || !!dossierFile;
 
     const hasCharacters = await Character.exists({ projectId: project.id });
     
-    const outlineNote = await Note.findOne({ projectId: project.id, id: 'outline' });
+    const outlineNote = await Note.findOne({
+      projectId: project.id,
+      $or: [
+        { id: { $in: ['outline', 'story_outline', 'final_outline'] } },
+        { type: 'outline' },
+        { name: /outline/i }
+      ]
+    });
     const outlineFile = await ContextFile.findOne({ projectId: project.id, destination: 'worldbuilding', path: /outline/i });
     const hasOutline = !!outlineNote || !!outlineFile;
 
@@ -552,15 +566,20 @@ app.get('/api/characters', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
     const list = await Character.find({ projectId: pId });
-    const formatted = list.map(c => ({
-      id: c.id,
-      name: c.name || c.id,
-      species: c.species || 'Unknown',
-      age: c.age || 'Unknown',
-      attributes: c.attributes || {},
-      content: c.content
-    }));
+    const formatted = [];
+    for (const item of list) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'character');
+      formatted.push({
+        id: cleaned.id,
+        name: cleaned.name || cleaned.id,
+        species: cleaned.species || 'Unknown',
+        age: cleaned.age || 'Unknown',
+        attributes: cleaned.attributes || {},
+        content: cleaned.content
+      });
+    }
     res.json({ characters: formatted });
   } catch (err) {
     console.error(err);
@@ -575,14 +594,13 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const parsedAttrs = await parseCharacterAttributes(content);
-    const nameMatch = content.match(/^\s*#\s+(.+)$/m);
-    const charName = nameMatch ? nameMatch[1].trim() : id;
+    const { sanitizeAndStructureContent } = require('./mongoDB');
+    const { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content, 'character', id);
 
     await Character.findOneAndUpdate(
       { projectId: pId, id },
       { 
-        content,
+        content: cleanContent,
         name: charName,
         species: parsedAttrs['species'] || 'Unknown',
         age: parsedAttrs['age'] || 'Unknown',
@@ -615,8 +633,13 @@ app.get('/api/chapters', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
     const list = await Chapter.find({ projectId: pId }).sort({ orderIndex: 1 });
-    const formatted = list.map(c => ({ id: c.id, content: c.content, attributes: c.attributes }));
+    const formatted = [];
+    for (const item of list) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
+      formatted.push({ id: cleaned.id, content: cleaned.content, attributes: cleaned.attributes });
+    }
     res.json({ chapters: formatted });
   } catch (err) {
     console.error(err);
@@ -633,8 +656,8 @@ app.post('/api/chapters/:id', async (req, res) => {
   try {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
-    const { extractAttributesAndContent } = require('./mongoDB');
-    const { attributes, cleanContent } = extractAttributesAndContent(content);
+    const { sanitizeAndStructureContent } = require('./mongoDB');
+    const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
 
     await Chapter.findOneAndUpdate(
       { projectId: pId, id },
@@ -665,8 +688,13 @@ app.get('/api/notes', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
     const list = await Note.find({ projectId: pId, type: { $ne: 'artifact' } });
-    const formatted = list.map(n => ({ id: n.id, content: n.content, name: n.name, type: n.type, attributes: n.attributes }));
+    const formatted = [];
+    for (const item of list) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'note');
+      formatted.push({ id: cleaned.id, content: cleaned.content, name: cleaned.name, type: cleaned.type, attributes: cleaned.attributes });
+    }
     res.json({ notes: formatted });
   } catch (err) {
     console.error(err);
@@ -680,9 +708,15 @@ app.get('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const note = await Note.findOne({ projectId: pId, id }).lean();
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    let note = await Note.findOne({ projectId: pId, id });
+    if (!note && (id === 'dossier' || id === 'story_dossier')) {
+      note = await Note.findOne({ projectId: pId, id: { $in: ['final_dossier', 'story_dossier', 'dossier'] } });
+    }
     if (!note) return res.status(404).json({ error: 'Note not found' });
-    res.json({ id: note.id, name: note.name, content: note.content, type: note.type, attributes: note.attributes });
+
+    const cleaned = await ensureCleanDocumentOnRead(note, 'note');
+    res.json({ id: cleaned.id, name: cleaned.name, content: cleaned.content, type: cleaned.type, attributes: cleaned.attributes });
   } catch (err) {
     console.error('Error fetching single note:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -696,14 +730,12 @@ app.post('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { extractAttributesAndContent } = require('./mongoDB');
-    const { attributes, cleanContent } = extractAttributesAndContent(content);
-    const name = attributes.name || id;
-    const type = attributes.type || 'note';
+    const { sanitizeAndStructureContent } = require('./mongoDB');
+    const { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, 'note', id);
 
     await Note.findOneAndUpdate(
-      { projectId: pId, id },
-      { name, type, content: cleanContent, attributes, lastEdited: new Date() },
+      { projectId: pId, id: normId },
+      { name: normName, type: normType, content: cleanContent, attributes, lastEdited: new Date() },
       { upsert: true }
     );
 
@@ -714,7 +746,7 @@ app.post('/api/notes/:id', async (req, res) => {
       type: 'manual_edit',
       status: 'complete',
       progress: 1.0,
-      logs: [`Update note: ${id}`]
+      logs: [`Update note: ${normId}`]
     });
 
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });

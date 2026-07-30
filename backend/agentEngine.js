@@ -84,35 +84,32 @@ async function resolveContextData(projectId, contextList) {
 
 async function saveArtifact(projectId, type, id, content, orderIndex = null) {
   try {
-    const { attributes, cleanContent } = extractAttributesAndContent(content);
+    const { sanitizeAndStructureContent } = require('./mongoDB');
+    const { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
 
-    if (type === 'chapter') {
+    if (normType === 'chapter') {
       await Chapter.findOneAndUpdate(
-        { projectId, id },
+        { projectId, id: normId },
         { content: cleanContent, attributes, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
         { upsert: true }
       );
-    } else if (type === 'character') {
-      const nameMatch = cleanContent.match(/^\s*#\s+(.+)$/m);
-      const name = attributes.name || (nameMatch ? nameMatch[1].trim() : id);
+    } else if (normType === 'character') {
       await Character.findOneAndUpdate(
-        { projectId, id },
-        { name, content: cleanContent, attributes, lastEdited: new Date() },
+        { projectId, id: normId },
+        { name: normName, content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
-    } else if (type === 'artifact') {
-      const name = attributes.name || id;
+    } else if (normType === 'artifact') {
       await Artifact.findOneAndUpdate(
-        { projectId, id },
-        { name, type: 'artifact', content: cleanContent, attributes, lastEdited: new Date() },
+        { projectId, id: normId },
+        { name: normName, type: 'artifact', content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     } else {
-      const name = attributes.name || id;
-      const noteType = attributes.type || type || 'note';
+      const noteType = attributes.type || normType || 'note';
       await Note.findOneAndUpdate(
-        { projectId, id },
-        { name, type: noteType, content: cleanContent, attributes, lastEdited: new Date() },
+        { projectId, id: normId },
+        { name: normName, type: noteType, content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     }
@@ -694,14 +691,29 @@ Respond strictly in JSON format:
           }
         }
 
-        await saveArtifact(jobData.projectId, task.outputType, outputId, finalSubResultText);
+        let finalId = outputId;
+        if (task.outputType === 'note') {
+          if (jobData.type === 'braindump_to_dossier' || template.id === 'dossier' || finalId.includes('dossier')) {
+            finalId = 'dossier';
+          } else if (jobData.type === 'outline_generator' || template.id === 'outline' || finalId.includes('outline')) {
+            finalId = 'outline';
+          }
+        }
+        await saveArtifact(jobData.projectId, task.outputType, finalId, finalSubResultText);
         previousOutput = finalSubResultText;
       }
 
       // Final Overall Goal Verification & Correction loop
       await updateJob(0.95, `Performing final overall goal verification...`);
       const lastTask = tasks[tasks.length - 1];
-      const targetOutputId = interpolateString(lastTask.outputId, payload);
+      let targetOutputId = interpolateString(lastTask.outputId, payload);
+      if (lastTask.outputType === 'note') {
+        if (jobData.type === 'braindump_to_dossier' || template.id === 'dossier' || targetOutputId.includes('dossier')) {
+          targetOutputId = 'dossier';
+        } else if (jobData.type === 'outline_generator' || template.id === 'outline' || targetOutputId.includes('outline')) {
+          targetOutputId = 'outline';
+        }
+      }
       
       const finalCompiledArtifact = await Artifact.findOne({ projectId: jobData.projectId, id: targetOutputId }).lean() 
         || await Note.findOne({ projectId: jobData.projectId, id: targetOutputId }).lean();

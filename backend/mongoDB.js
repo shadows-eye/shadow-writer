@@ -199,27 +199,55 @@ function findProject(projects, projectId) {
   return p;
 }
 
-function extractAttributesAndContent(content) {
+function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
+  let content = rawContent || '';
   const attributes = {};
-  let cleanContent = content || '';
 
-  if (!content) return { attributes, cleanContent };
+  if (typeof content !== 'string') {
+    if (typeof content === 'object') {
+      try {
+        content = JSON.stringify(content, null, 2);
+      } catch (e) {
+        content = String(content || '');
+      }
+    } else {
+      content = String(content || '');
+    }
+  }
 
-  // 1. Try parsing JSON code block: ```json ... ```
+  // 1. Normalize line breaks (\r\n -> \n)
+  content = content.replace(/\r\n/g, '\n').trim();
+
+  // 2. Iteratively strip outer markdown code block fences (```markdown ... ``` or ```md ... ``` or ``` ... ```)
+  const outerFenceRegex = /^\s*```(?:markdown|md|text|txt)?\s*\n([\s\S]*?)\n```\s*$/i;
+  let hasOuterFence = true;
+  let maxLoop = 5;
+  while (hasOuterFence && maxLoop > 0) {
+    maxLoop--;
+    const match = content.match(outerFenceRegex);
+    if (match && match[1]) {
+      content = match[1].trim();
+    } else {
+      hasOuterFence = false;
+    }
+  }
+
+  // 3. Extract embedded JSON metadata block (```json ... ```) if present
   const jsonRegex = /```json\s*\n([\s\S]*?)\n```/i;
   const jsonMatch = content.match(jsonRegex);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[1]);
-      Object.assign(attributes, parsed);
-      // Clean JSON code block out of content
-      cleanContent = cleanContent.replace(jsonRegex, '').trim();
+      if (typeof parsed === 'object' && parsed !== null) {
+        Object.assign(attributes, parsed);
+      }
+      content = content.replace(jsonRegex, '').trim();
     } catch (e) {
-      console.warn("Failed to parse JSON code block in content:", e);
+      console.warn("Failed to parse embedded JSON block in content:", e);
     }
   }
 
-  // 2. Try parsing YAML front-matter: between --- and --- at the start
+  // 4. Extract YAML front-matter (--- ... ---) if present
   const fmRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/i;
   const fmMatch = content.match(fmRegex);
   if (fmMatch) {
@@ -230,25 +258,67 @@ function extractAttributesAndContent(content) {
         const key = line.substring(0, colonIdx).trim();
         let value = line.substring(colonIdx + 1).trim();
 
-        // Parse basic types: boolean, number, or strings
-        if (value.startsWith('"') && value.endsWith('"')) {
-          value = value.slice(1, -1);
-        } else if (value.startsWith("'") && value.endsWith("'")) {
-          value = value.slice(1, -1);
-        } else if (value.toLowerCase() === 'true') {
-          value = true;
-        } else if (value.toLowerCase() === 'false') {
-          value = false;
-        } else if (!isNaN(value) && value !== '') {
-          value = Number(value);
-        }
+        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+        else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+        else if (value.toLowerCase() === 'true') value = true;
+        else if (value.toLowerCase() === 'false') value = false;
+        else if (!isNaN(value) && value !== '') value = Number(value);
+
         attributes[key] = value;
       }
     });
-    cleanContent = cleanContent.replace(fmRegex, '').trim();
+    content = content.replace(fmRegex, '').trim();
   }
 
-  return { attributes, cleanContent };
+  // 5. Strip redundant leading file headers / filenames (e.g. "# dossier.md", "File: notes/dossier.md", "### dossier.md")
+  content = content.replace(/^\s*(?:#+\s*|File:\s*|Path:\s*|Output:\s*)?[a-zA-Z0-9_\-\/\.]+\.md\s*\n+/i, '').trim();
+
+  // 6. Again check if outer fence remains after file header removal
+  if (outerFenceRegex.test(content)) {
+    const match = content.match(outerFenceRegex);
+    if (match && match[1]) content = match[1].trim();
+  }
+
+  // 7. Fix escaped backslashes in JS expressions or formatting if present
+  content = content.replace(/\\(\$\{)/g, '$1');
+
+  // 8. Determine clean name and title
+  let name = attributes.name || '';
+  if (!name) {
+    const h1Match = content.match(/^\s*#\s+(.+)$/m);
+    if (h1Match) {
+      name = h1Match[1].trim();
+    } else {
+      name = id || 'Untitled Note';
+    }
+  }
+
+  // 9. Standardize output type & ID mapping
+  let normalizedId = id;
+  let normalizedType = type;
+
+  if (type === 'note' || !type) {
+    if (id === 'story_dossier' || id === 'final_dossier' || id === 'dossier') {
+      normalizedId = 'dossier';
+      normalizedType = 'dossier';
+    } else if (id === 'story_outline' || id === 'final_outline' || id === 'outline') {
+      normalizedId = 'outline';
+      normalizedType = 'outline';
+    }
+  }
+
+  return {
+    id: normalizedId,
+    type: normalizedType,
+    name,
+    attributes,
+    cleanContent: content
+  };
+}
+
+function extractAttributesAndContent(content) {
+  const res = sanitizeAndStructureContent(content);
+  return { attributes: res.attributes, cleanContent: res.cleanContent };
 }
 
 async function seedDatabaseIfEmpty() {
@@ -454,12 +524,73 @@ async function migrateExistingCharacters() {
   }
 }
 
+async function ensureCleanDocumentOnRead(doc, type = 'note') {
+  if (!doc || !doc.content) return doc;
+
+  const rawContent = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
+  
+  const isOuterFenced = /^\s*```(?:markdown|md|text|txt)?\s*\n/i.test(rawContent);
+  const hasFileHeader = /^\s*(?:#+\s*|File:\s*|Path:\s*|Output:\s*)?[a-zA-Z0-9_\-\/\.]+\.md\s*\n/i.test(rawContent);
+  const isAliasId = (type === 'note' || type === 'dossier') && (doc.id === 'final_dossier' || doc.id === 'story_dossier' || doc.id === 'final_outline');
+  const hasUnparsedJson = /```json\s*\n[\s\S]*?\n```/i.test(rawContent);
+
+  // Self-heal if any malformed indicator is detected
+  if (isOuterFenced || hasFileHeader || isAliasId || hasUnparsedJson) {
+    console.log(`[Self-Healing] Cleaning malformed document on read: ID="${doc.id}" (type=${type})`);
+
+    // 1. Fast deterministic pass
+    const { id: normId, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(rawContent, type, doc.id);
+
+    let finalContent = cleanContent;
+    let finalAttributes = { ...(doc.attributes || {}), ...attributes };
+    let finalName = doc.name || normName;
+
+    // 2. Gemini AI fallback check if content still starts with code blocks or is structurally damaged
+    if (/^\s*```/i.test(finalContent)) {
+      try {
+        const { generateContent } = require('./geminiClient');
+        const prompt = `You are a Document Restructuring Assistant. Clean and fix the following raw document content into pure, clean Markdown. 
+Do NOT enclose the entire response in markdown code blocks (\`\`\`markdown ... \`\`\`).
+Do NOT include file headers like "# dossier.md".
+Return strictly the clean formatted Markdown body.
+
+Raw Content:
+${finalContent}`;
+
+        const geminiCleaned = await generateContent({ message: prompt, isSubagent: false });
+        if (geminiCleaned && geminiCleaned.trim().length > 0) {
+          finalContent = geminiCleaned
+            .replace(/^\s*```(?:markdown|md)?\s*\n/i, '')
+            .replace(/\n```\s*$/i, '')
+            .trim();
+        }
+      } catch (e) {
+        console.warn(`[Self-Healing] Gemini AI cleanup fallback skipped for doc ${doc.id}:`, e.message);
+      }
+    }
+
+    // 3. Update the document and persist back to MongoDB
+    doc.content = finalContent;
+    doc.attributes = finalAttributes;
+    if (finalName) doc.name = finalName;
+    if (normId && normId !== doc.id) doc.id = normId;
+
+    if (doc.save && typeof doc.save === 'function') {
+      await doc.save().catch(err => console.error(`[Self-Healing] Failed to persist cleaned doc ${doc.id}:`, err));
+    }
+  }
+
+  return doc;
+}
+
 module.exports = {
   readDB,
   writeDB,
   parseCharacterAttributes,
   migrateExistingCharacters,
   extractAttributesAndContent,
+  sanitizeAndStructureContent,
+  ensureCleanDocumentOnRead,
   findProject,
   Project,
   Template,
