@@ -84,8 +84,14 @@ async function resolveContextData(projectId, contextList) {
 
 async function saveArtifact(projectId, type, id, content, orderIndex = null) {
   try {
-    const { sanitizeAndStructureContent } = require('./mongoDB');
-    const { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    let { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
+
+    const targetType = attributes.type || normType;
+    if (typeof constructMarkdownFromAttributes === 'function') {
+      const reconstructed = constructMarkdownFromAttributes(normName, targetType, attributes);
+      if (reconstructed) cleanContent = reconstructed;
+    }
 
     if (normType === 'chapter') {
       await Chapter.findOneAndUpdate(
@@ -106,10 +112,9 @@ async function saveArtifact(projectId, type, id, content, orderIndex = null) {
         { upsert: true }
       );
     } else {
-      const noteType = attributes.type || normType || 'note';
       await Note.findOneAndUpdate(
         { projectId, id: normId },
-        { name: normName, type: noteType, content: cleanContent, attributes, lastEdited: new Date() },
+        { name: normName, type: targetType || 'note', content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     }

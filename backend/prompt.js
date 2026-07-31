@@ -63,7 +63,7 @@ async function resolveContextData(projectId, contextList) {
 }
 
 router.post('/api/ai/chat', async (req, res) => {
-  const { message, templateIds, projectId } = req.body;
+  const { message, templateIds, projectId, activeDoc } = req.body;
   const userId = req.headers['x-user-id'] || 'system';
   if (!message) return res.status(400).json({ error: 'Missing message' });
 
@@ -74,6 +74,12 @@ router.post('/api/ai/chat', async (req, res) => {
 
   // Get templates content if provided
   let contextStr = '';
+
+  // Auto-inject currently open document context if active in editor
+  if (activeDoc && activeDoc.content) {
+    contextStr += `\n[Active Open Document in Editor]\nType: ${activeDoc.type || 'document'}\nID: ${activeDoc.id || 'current'}\nContent:\n${activeDoc.content}\n`;
+  }
+
   if (selectedContextTypes.length > 0) {
     contextStr += await resolveContextData(projectId, selectedContextTypes);
   }
@@ -112,7 +118,21 @@ router.post('/api/ai/chat', async (req, res) => {
   };
 
   try {
-    const payload = contextStr ? `Context: ${contextStr}\n\nPrompt: ${message}` : message;
+    const systemPrefix = `You are an expert creative writing and worldbuilding assistant.
+
+RESPONSE FORMATTING STYLE:
+1. Do NOT use emojis in headings. Use clean, elegant titles suitable for professional book writing and worldbuilding dossiers (e.g., "## Propulsion Technology Registry", "## Sub-Light Propulsion").
+2. Include a concise 1-2 sentence summary introduction under main titles.
+3. Use horizontal rule dividers ("---") to cleanly separate major sections.
+4. Format lists with bold term prefixes (e.g., "* **Ion Thrusters**: Electric fields that accelerate charged particles...").
+5. Conclude your response with an engaging follow-up prompt offering 2-3 logical creative next steps or choices (e.g., "Would you like to establish the hazards of these drives—such as what happens if a Resonance Drive fails—or should we define the power sources needed?").
+
+CRITICAL TECHNICAL DIRECTIVES:
+- Do NOT enclose your entire response in outer markdown code fences (never use \`\`\`markdown ... \`\`\` wrappers).
+- Do NOT output file headers or .md extension titles (never write '# dossier.md' or 'File: note.md').
+- Output clean structured Markdown content directly.\n\n`;
+
+    const payload = contextStr ? `${systemPrefix}Context: ${contextStr}\n\nPrompt: ${message}` : `${systemPrefix}${message}`;
     
     console.log('Sending direct chat request to Gemini...');
     const reply = await generateContent({

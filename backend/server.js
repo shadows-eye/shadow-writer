@@ -589,22 +589,31 @@ app.get('/api/characters', async (req, res) => {
 
 app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId } = req.body;
-  if (!content) return res.status(400).json({ error: 'Missing content' });
+  const { content, attributes: inputAttrs, projectId } = req.body;
+  if (!content && !inputAttrs) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent } = require('./mongoDB');
-    const { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content, 'character', id);
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    const existingChar = await Character.findOne({ projectId: pId, id });
+
+    let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
+    const mergedAttrs = { ...(existingChar ? existingChar.attributes : {}), ...parsedAttrs, ...(inputAttrs || {}) };
+
+    // Reconstruct clean markdown content from merged attributes
+    if (typeof constructMarkdownFromAttributes === 'function') {
+      const reconstructed = constructMarkdownFromAttributes(charName || (existingChar ? existingChar.name : id), 'character', mergedAttrs);
+      if (reconstructed) cleanContent = reconstructed;
+    }
 
     await Character.findOneAndUpdate(
       { projectId: pId, id },
       { 
         content: cleanContent,
-        name: charName,
-        species: parsedAttrs['species'] || 'Unknown',
-        age: parsedAttrs['age'] || 'Unknown',
-        attributes: parsedAttrs,
+        name: charName || (existingChar ? existingChar.name : id),
+        species: mergedAttrs['species'] || 'Unknown',
+        age: mergedAttrs['age'] || 'Unknown',
+        attributes: mergedAttrs,
         lastEdited: new Date()
       },
       { upsert: true }
@@ -725,19 +734,35 @@ app.get('/api/notes/:id', async (req, res) => {
 
 app.post('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId } = req.body;
-  if (!content) return res.status(400).json({ error: 'Missing content' });
+  const { content, projectId, attributes: reqAttributes } = req.body;
+  if (!content && !reqAttributes) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent } = require('./mongoDB');
-    const { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, 'note', id);
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    const existingNote = await Note.findOne({ projectId: pId, id });
+    const existingAttrsObj = existingNote ? (existingNote.attributes instanceof Map ? Object.fromEntries(existingNote.attributes) : (existingNote.attributes || {})) : {};
 
-    await Note.findOneAndUpdate(
-      { projectId: pId, id: normId },
-      { name: normName, type: normType, content: cleanContent, attributes, lastEdited: new Date() },
-      { upsert: true }
-    );
+    let { id: normId, type: normType, name: normName, attributes: inferredAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
+    const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
+    const mergedAttributes = { ...(existingAttrsObj || {}), ...(inferredAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+
+    if (typeof constructMarkdownFromAttributes === 'function') {
+      const reconstructed = constructMarkdownFromAttributes(normName || (existingNote ? existingNote.name : id), targetType, mergedAttributes);
+      if (reconstructed) cleanContent = reconstructed;
+    }
+
+    let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));
+    if (!note) {
+      note = new Note({ projectId: pId, id: normId });
+    }
+    note.name = normName || note.name || id;
+    note.type = targetType;
+    note.content = cleanContent;
+    note.attributes = mergedAttributes;
+    note.markModified('attributes');
+    note.lastEdited = new Date();
+    await note.save();
 
     // Save to History
     await History.create({
@@ -756,13 +781,87 @@ app.post('/api/notes/:id', async (req, res) => {
   }
 });
 
+app.delete('/api/characters/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  const pId = projectId || 'global';
+
+  try {
+    let result = await Character.deleteOne({ projectId: pId, id });
+    if (result.deletedCount === 0) {
+      result = await Character.deleteOne({ projectId: pId, $or: [{ id: new RegExp('^' + id + '$', 'i') }, { name: new RegExp('^' + id + '$', 'i') }] });
+    }
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Character not found' });
+    }
+
+    await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      logs: [`Delete character: ${id}`]
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting character:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/chapters/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  const pId = projectId || 'global';
+
+  try {
+    let result = await Chapter.deleteOne({ projectId: pId, id });
+    if (result.deletedCount === 0) {
+      result = await Chapter.deleteOne({ projectId: pId, $or: [{ id: new RegExp('^' + id + '$', 'i') }] });
+    }
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Chapter not found' });
+    }
+
+    await History.create({
+      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
+      projectId: pId,
+      type: 'manual_edit',
+      status: 'complete',
+      progress: 1.0,
+      logs: [`Delete chapter: ${id}`]
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting chapter:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.delete('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.query;
   const pId = projectId || 'global';
 
   try {
-    const result = await Note.deleteOne({ projectId: pId, id });
+    let result = await Note.deleteOne({ projectId: pId, id });
+
+    // Fallback matching if exact id match returned 0
+    if (result.deletedCount === 0) {
+      if (id === 'dossier' || id === 'story_dossier' || id === 'final_dossier') {
+        result = await Note.deleteMany({ projectId: pId, $or: [{ id: { $in: ['dossier', 'story_dossier', 'final_dossier'] } }, { type: 'dossier' }, { name: /dossier/i }] });
+      } else if (id === 'outline' || id === 'story_outline' || id === 'final_outline') {
+        result = await Note.deleteMany({ projectId: pId, $or: [{ id: { $in: ['outline', 'story_outline', 'final_outline'] } }, { type: 'outline' }, { name: /outline/i }] });
+      } else {
+        result = await Note.deleteOne({ projectId: pId, $or: [{ id: new RegExp('^' + id + '$', 'i') }, { name: new RegExp('^' + id + '$', 'i') }] });
+      }
+    }
+
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: 'Note not found' });
     }

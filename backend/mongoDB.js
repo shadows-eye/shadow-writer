@@ -10,6 +10,7 @@ mongoose.connect(mongoUri)
     console.log('Connected to MongoDB');
     seedDatabaseIfEmpty()
       .then(() => migrateExistingCharacters().catch(err => console.error('Migration error:', err)))
+      .then(() => cleanDatabaseOnStartup().catch(err => console.error('Startup cleanup error:', err)))
       .catch(err => console.error('Error seeding database:', err));
   })
   .catch(err => console.error('MongoDB connection error:', err));
@@ -218,6 +219,17 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   // 1. Normalize line breaks (\r\n -> \n)
   content = content.replace(/\r\n/g, '\n').trim();
 
+  // 1b. Unescape backslash-escaped markdown characters (\* -> *, \_ -> _, \# -> #)
+  content = content.replace(/\\([*#_\-\[\]\(\)])/g, '$1');
+
+  // Fix mangled formatting with broken newlines inside numbers or bold tags
+  content = content.replace(/(\d+)\s*\n\s*,(\d+)/g, '$1,$2');
+  content = content.replace(/(\d+)\s*\n\s*\.(\d+)/g, '$1.$2');
+  content = content.replace(/\*\*\s*([^*]+?)\s*\*\*/g, '**$1**');
+  content = content.replace(/\*\*\s+/g, '**');
+  content = content.replace(/\s+\*\*/g, '**');
+  content = content.replace(/\*\*([^*]+)\n([^*]+)\*\*/g, '**$1 $2**');
+
   // 2. Iteratively strip outer markdown code block fences (```markdown ... ``` or ```md ... ``` or ``` ... ```)
   const outerFenceRegex = /^\s*```(?:markdown|md|text|txt)?\s*\n([\s\S]*?)\n```\s*$/i;
   let hasOuterFence = true;
@@ -270,16 +282,22 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
     content = content.replace(fmRegex, '').trim();
   }
 
-  // 5. Strip redundant leading file headers / filenames (e.g. "# dossier.md", "File: notes/dossier.md", "### dossier.md")
-  content = content.replace(/^\s*(?:#+\s*|File:\s*|Path:\s*|Output:\s*)?[a-zA-Z0-9_\-\/\.]+\.md\s*\n+/i, '').trim();
+  // 5. Strip leading horizontal rules (---) at the very start of document
+  content = content.replace(/^\s*---\s*\n+/i, '').trim();
 
-  // 6. Again check if outer fence remains after file header removal
+  // 6. Strip redundant leading file headers / filenames (e.g. "# dossier.md", "File: notes/dossier.md", "cosmology and the state of the Zark.md")
+  content = content.replace(/^\s*(?:#+\s*|File:\s*|Path:\s*|Output:\s*)?[a-zA-Z0-9_\-\/\.\s]+\.md\s*\n+/i, '').trim();
+
+  // 7. Strip leading horizontal rules again if left after filename removal
+  content = content.replace(/^\s*---\s*\n+/i, '').trim();
+
+  // 8. Again check if outer fence remains after header removal
   if (outerFenceRegex.test(content)) {
     const match = content.match(outerFenceRegex);
     if (match && match[1]) content = match[1].trim();
   }
 
-  // 7. Fix escaped backslashes in JS expressions or formatting if present
+  // 9. Fix escaped backslashes in JS expressions or formatting if present
   content = content.replace(/\\(\$\{)/g, '$1');
 
   // 8. Determine clean name and title
@@ -449,8 +467,10 @@ async function parseCharacterAttributes(content) {
 
   try {
     const elements = await CharacterElement.find({});
-    // Normalize newlines
-    const normalized = content.replace(/\r\n/g, '\n');
+    // Normalize newlines and pre-format concatenated single-line fields into clean separated list items
+    let normalized = content.replace(/\r\n/g, '\n');
+    normalized = normalized.replace(/([^\n])\s*[\-\*]\s*\*\*([^*]+)\*\*/g, '$1\n- **$2**');
+    normalized = normalized.replace(/^[\-\*]\s*\*\*/gm, '- **');
 
     for (const el of elements) {
       if (!el.prefix) continue;
@@ -494,26 +514,166 @@ async function parseCharacterAttributes(content) {
   return attributes;
 }
 
+function parseContentToAttributes(content, type) {
+  if (!content) return {};
+  const attributes = { type: type || 'notes' };
+  const lines = String(content).split('\n');
+
+  lines.forEach(line => {
+    const match = line.match(/^[ \t]*[\-\*]\s*\*\*([^*]+)\*\*:\s*(.*)$/);
+    if (match) {
+      const key = match[1].toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      if (key && !attributes[key]) {
+        attributes[key] = match[2].trim();
+      }
+    }
+  });
+
+  const sections = String(content).split(/^## /m);
+  sections.forEach(sec => {
+    const secLines = sec.trim().split('\n');
+    const header = secLines[0].trim();
+    const body = secLines.slice(1).join('\n').trim();
+    if (header && body) {
+      const secKey = header.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      if (secKey && !attributes[secKey]) {
+        attributes[secKey] = body;
+      }
+    }
+  });
+
+  return attributes;
+}
+
+function constructMarkdownFromAttributes(name, type, attributes = {}) {
+  let md = `# ${name || 'Untitled'}\n\n`;
+
+  const attrsObj = attributes instanceof Map ? Object.fromEntries(attributes) : (attributes || {});
+
+  const cleanAttr = (val) => {
+    if (!val) return '';
+    let s = String(val).replace(/\r\n/g, '\n').trim();
+    s = s.replace(/\s*---\s*$/, '').trim();
+    if (s.includes('-**') || s.includes('- **')) {
+      s = s.replace(/([^\n])\s*[\-\*]\s*\*\*([^*]+)\*\*/g, '$1\n- **$2**').replace(/^[\-\*]\s*\*\*/gm, '- **');
+    }
+    return s;
+  };
+
+  const normType = (type || '').toLowerCase();
+
+  if (normType === 'character' || normType === 'characters') {
+    const species = cleanAttr(attrsObj.species);
+    const age = cleanAttr(attrsObj.age);
+    const rank = cleanAttr(attrsObj.rank);
+    const physical_desc = cleanAttr(attrsObj.physical_desc);
+    const background = cleanAttr(attrsObj.background);
+    const conflict = cleanAttr(attrsObj.conflict);
+    const key_relationships = cleanAttr(attrsObj.key_relationships);
+
+    if (species) md += `- **Species**: ${species}\n`;
+    if (age) md += `- **Age**: ${age}\n`;
+    if (rank) md += `- **Rank/Clearance**: ${rank}\n`;
+    if (physical_desc) md += `- **Physical Description**: ${physical_desc}\n`;
+
+    md += `\n---\n\n`;
+    if (background) md += `## Background & Role\n${background}\n\n---\n\n`;
+    if (conflict) md += `## Conflict\n${conflict}\n\n---\n\n`;
+    if (key_relationships) md += `## Key Relationships\n${key_relationships}\n\n`;
+  } else if (normType === 'technology') {
+    const classification = cleanAttr(attrsObj.classification);
+    const origin = cleanAttr(attrsObj.origin);
+    const energy_source = cleanAttr(attrsObj.energy_source);
+    const capabilities = cleanAttr(attrsObj.capabilities);
+    const vulnerabilities = cleanAttr(attrsObj.vulnerabilities);
+    const historical_impact = cleanAttr(attrsObj.historical_impact);
+
+    if (classification) md += `- **Classification**: ${classification}\n`;
+    if (origin) md += `- **Origin/Creator**: ${origin}\n`;
+    if (energy_source) md += `- **Energy Source**: ${energy_source}\n`;
+
+    md += `\n---\n\n`;
+    if (capabilities) md += `## Capabilities & Weaponry\n${capabilities}\n\n---\n\n`;
+    if (vulnerabilities) md += `## Vulnerabilities & Weaknesses\n${vulnerabilities}\n\n---\n\n`;
+    if (historical_impact) md += `## Historical Impact\n${historical_impact}\n\n`;
+  } else if (normType === 'races') {
+    const faction_name = cleanAttr(attrsObj.faction_name);
+    const homeworld = cleanAttr(attrsObj.homeworld);
+    const governance = cleanAttr(attrsObj.governance);
+    const culture = cleanAttr(attrsObj.culture);
+    const military = cleanAttr(attrsObj.military);
+
+    if (faction_name) md += `- **Faction Name**: ${faction_name}\n`;
+    if (homeworld) md += `- **Homeworld**: ${homeworld}\n`;
+    if (governance) md += `- **Governance**: ${governance}\n`;
+
+    md += `\n---\n\n`;
+    if (culture) md += `## Culture & Ideology\n${culture}\n\n---\n\n`;
+    if (military) md += `## Military Strength\n${military}\n\n`;
+  } else if (normType === 'locations') {
+    const system_name = cleanAttr(attrsObj.system_name);
+    const climate = cleanAttr(attrsObj.climate);
+    const strategic_value = cleanAttr(attrsObj.strategic_value);
+    const landmarks = cleanAttr(attrsObj.landmarks);
+    const history = cleanAttr(attrsObj.history);
+
+    if (system_name) md += `- **System Name**: ${system_name}\n`;
+    if (climate) md += `- **Climate/Environment**: ${climate}\n`;
+
+    md += `\n---\n\n`;
+    if (strategic_value) md += `## Strategic & Economic Value\n${strategic_value}\n\n---\n\n`;
+    if (landmarks) md += `## Key Landmarks & Outposts\n${landmarks}\n\n---\n\n`;
+    if (history) md += `## Historical Events\n${history}\n\n`;
+  } else if (normType === 'chapter' || normType === 'chapters') {
+    const pov = cleanAttr(attrsObj.pov_character);
+    const location = cleanAttr(attrsObj.location);
+    const summary = cleanAttr(attrsObj.summary);
+    const body_text = cleanAttr(attrsObj.body_text);
+
+    if (pov) md += `- **POV Character**: ${pov}\n`;
+    if (location) md += `- **Location**: ${location}\n`;
+
+    md += `\n---\n\n`;
+    if (summary) md += `## Chapter Summary\n${summary}\n\n---\n\n`;
+    if (body_text) md += `${body_text}\n\n`;
+  } else {
+    let generalMd = `# ${name || 'Untitled'}\n\n`;
+    let keys = Object.keys(attrsObj).filter(k => k !== 'type' && k !== 'title' && attrsObj[k]);
+    if (keys.length > 0) {
+      keys.forEach(k => {
+        const titleKey = k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        generalMd += `## ${titleKey}\n${cleanAttr(attrsObj[k])}\n\n---\n\n`;
+      });
+      return generalMd.trim();
+    }
+    return null;
+  }
+
+  return md.trim();
+}
+
 async function migrateExistingCharacters() {
   console.log('Running character database migration...');
   try {
     const characters = await Character.find({});
     let count = 0;
     for (const char of characters) {
-      if (char.content) {
-        // Find Name
+      if (char.attributes && Object.keys(char.attributes).length > 0) {
+        // Attributes exist in DB as source of truth -> reconstruct clean markdown
+        const cleanContent = constructMarkdownFromAttributes(char.name || char.id, 'character', char.attributes);
+        if (cleanContent) char.content = cleanContent;
+        await char.save();
+        count++;
+      } else if (char.content) {
         const nameMatch = char.content.match(/^\s*#\s+(.+)$/m);
         const name = nameMatch ? nameMatch[1].trim() : char.id;
 
         const attrs = await parseCharacterAttributes(char.content);
-        const species = attrs['species'] || 'Unknown';
-        const age = attrs['age'] || 'Unknown';
-
         char.name = name;
-        char.species = species;
-        char.age = age;
+        char.species = attrs['species'] || 'Unknown';
+        char.age = attrs['age'] || 'Unknown';
         char.attributes = attrs;
-        
+        char.content = constructMarkdownFromAttributes(name, 'character', attrs);
         await char.save();
         count++;
       }
@@ -583,14 +743,78 @@ ${finalContent}`;
   return doc;
 }
 
+async function cleanDatabaseOnStartup() {
+  console.log('🔍 Running MongoDB startup data hygiene scan...');
+  let cleanedCount = 0;
+  try {
+    const notes = await Note.find({});
+    for (const doc of notes) {
+      if (doc.attributes) {
+        let subType = doc.type || 'note';
+        if (doc.id.startsWith('races-')) subType = 'races';
+        else if (doc.id.startsWith('systems-') || doc.id.startsWith('locations-')) subType = 'locations';
+        else if (doc.id.startsWith('tech-')) subType = 'technology';
+
+        const cleanContent = constructMarkdownFromAttributes(doc.name || doc.id, subType, doc.attributes);
+        if (cleanContent && cleanContent !== doc.content) {
+          doc.content = cleanContent;
+          await doc.save();
+          cleanedCount++;
+        }
+      }
+    }
+
+    const characters = await Character.find({});
+    for (const doc of characters) {
+      if (doc.attributes) {
+        const cleanContent = constructMarkdownFromAttributes(doc.name || doc.id, 'character', doc.attributes);
+        if (cleanContent && cleanContent !== doc.content) {
+          doc.content = cleanContent;
+          await doc.save();
+          cleanedCount++;
+        }
+      }
+    }
+
+    const chapters = await Chapter.find({});
+    for (const doc of chapters) {
+      if (!doc.content) continue;
+      const raw = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
+      const { attributes, cleanContent } = sanitizeAndStructureContent(raw, 'chapter', doc.id);
+      
+      if (cleanContent !== raw) {
+        let existingAttrs = {};
+        if (doc.attributes) {
+          if (doc.attributes instanceof Map) {
+            existingAttrs = Object.fromEntries(doc.attributes);
+          } else if (typeof doc.attributes === 'object') {
+            existingAttrs = { ...doc.attributes };
+          }
+        }
+        doc.content = cleanContent;
+        doc.attributes = { ...existingAttrs, ...attributes };
+        await doc.save();
+        cleanedCount++;
+      }
+    }
+
+    console.log(`✓ Startup database cleanup completed. Sanitized ${cleanedCount} malformed documents.`);
+  } catch (err) {
+    console.error('Error during startup database cleanup:', err);
+  }
+}
+
 module.exports = {
   readDB,
   writeDB,
   parseCharacterAttributes,
+  parseContentToAttributes,
+  constructMarkdownFromAttributes,
   migrateExistingCharacters,
   extractAttributesAndContent,
   sanitizeAndStructureContent,
   ensureCleanDocumentOnRead,
+  cleanDatabaseOnStartup,
   findProject,
   Project,
   Template,
