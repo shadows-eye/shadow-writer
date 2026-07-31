@@ -647,7 +647,12 @@ app.get('/api/chapters', async (req, res) => {
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
-      formatted.push({ id: cleaned.id, content: cleaned.content, attributes: cleaned.attributes });
+      formatted.push({
+        id: cleaned.id,
+        content: cleaned.content,
+        attributes: cleaned.attributes,
+        pendingDiff: cleaned.pendingDiff || null
+      });
     }
     res.json({ chapters: formatted });
   } catch (err) {
@@ -658,31 +663,30 @@ app.get('/api/chapters', async (req, res) => {
 
 app.post('/api/chapters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId } = req.body;
-  if (!content) return res.status(400).json({ error: 'Missing content' });
+  const { content, projectId, clearPendingDiff } = req.body;
+  if (!content && clearPendingDiff !== true) return res.status(400).json({ error: 'Missing content' });
   const pId = projectId || 'global';
 
   try {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
     const { sanitizeAndStructureContent } = require('./mongoDB');
-    const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
+    
+    const updateData = { orderIndex, lastEdited: new Date() };
+    if (content) {
+      const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
+      updateData.content = cleanContent;
+      updateData.attributes = attributes;
+    }
+    if (clearPendingDiff) {
+      updateData.pendingDiff = null;
+    }
 
     await Chapter.findOneAndUpdate(
       { projectId: pId, id },
-      { content: cleanContent, attributes, orderIndex, lastEdited: new Date() },
+      updateData,
       { upsert: true }
     );
-
-    // Save to History
-    await History.create({
-      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
-      projectId: pId,
-      type: 'manual_edit',
-      status: 'complete',
-      progress: 1.0,
-      logs: [`Update chapter: ${id}`]
-    });
 
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {

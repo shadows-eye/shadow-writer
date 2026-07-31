@@ -73,7 +73,15 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
       const url = `https://${host}/v1beta1/projects/${project}/locations/${loc}/publishers/google/models/${model}:generateContent`;
       headers['Authorization'] = token;
 
-      let payload = { contents: contents };
+      let payload = {
+        contents: contents,
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+        ]
+      };
       if (config) {
         payload.generationConfig = {};
         if (config.system_instruction) {
@@ -122,7 +130,15 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
     const url = `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}:generateContent`;
     headers['x-goog-api-key'] = apiKey;
 
-    let payload = { contents: contents };
+    let payload = {
+      contents: contents,
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+      ]
+    };
     if (config) {
       payload.generationConfig = {};
       if (config.system_instruction) {

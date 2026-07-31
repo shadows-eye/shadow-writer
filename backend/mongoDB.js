@@ -301,15 +301,7 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   content = content.replace(/\\(\$\{)/g, '$1');
 
   // 8. Determine clean name and title
-  let name = attributes.name || '';
-  if (!name) {
-    const h1Match = content.match(/^\s*#\s+(.+)$/m);
-    if (h1Match) {
-      name = h1Match[1].trim();
-    } else {
-      name = id || 'Untitled Note';
-    }
-  }
+  let name = attributes.name || id || 'Untitled Note';
 
   // 9. Standardize output type & ID mapping
   let normalizedId = id;
