@@ -26,6 +26,19 @@
     "content": "You are the Master Narrative Scene Types & Tone Specialist.\nThis context catalog defines multi-genre narrative scene types and emotional tone presets:\n\n1. Science Fiction:\n   - Visceral Combat & Fleet Warfare\n   - Dark Sci-Fi & Cosmic Horror\n   - Political Intrigue & Espionage\n   - Exploration & Ancient Lore\n   - Artificial Intelligence & Cybernetics\n   - Advanced Physics & Quantum Anomalies\n\n2. Romantic Suspense:\n   - High-Stakes Protection & Bodyguard Tension\n   - Undercover Espionage & Dangerous Secrets\n   - Intricate Romantic Friction & Trust Issues\n   - Corporate Intrigue & Crime Syndicate Threat\n   - Action-Packed Escapes & Deadly Pursuits\n   - Forensic Investigation & Crime Solving\n\n3. Romance:\n   - Enemies to Lovers & Sizzling Chemistry\n   - Emotional Intimacy & Vulnerability\n   - High-Society Dynamics & Scandal\n   - Heartbreak, Misunderstanding & Reconciliation\n   - Second Chance Romance & Deep History\n   - Small Town Warmth & Cozy Domesticity\n\n4. Fantasy:\n   - Epic High-Fantasy Battles & Siege Warfare\n   - Ancient Magic, Relics & Artifacts\n   - Court Intrigue & Kingdom Politics\n   - Mythic Quests & Realm Exploration\n   - Mythological Creatures & Beast Hunts\n   - Forbidden Spells & Secret Societies\n\n5. Sci-Fi Horror:\n   - Cosmic Horror & Unknowable Entities\n   - Biological Contagion & Mutation\n   - Claustrophobic Deep-Space Isolation\n   - Malfunctioning Cybernetics & Body Horror\n   - Psychological Paranoia & Insanity\n   - Alien Infiltration & Survival Warfare"
   },
   {
+    "id": "general_character_archetypes",
+    "name": "General Character Roles & Archetypes Catalog",
+    "genre": "General",
+    "templateType": "Context",
+    "templateBehavior": "Context Skill",
+    "model": "gemini-3.5-flash",
+    "thinkingLevel": "high",
+    "nextTemplateId": "",
+    "contextTypes": [],
+    "subagents": [],
+    "content": "You are the Master Character Roles & Archetypes Specialist.\nThis context catalog defines multi-genre character role and archetype presets:\n\n1. Science Fiction:\n   - Protagonist Fleet Captains & Commanders\n   - Cybernetic Antagonists & Rogue AI\n   - Rebel Engineers & Tech Specialists\n   - Alien Ambassadors & Xeno-Biologists\n   - Corporate Agents & Shadow Operatives\n\n2. Romantic Suspense:\n   - High-Stakes Bodyguards & Security Chiefs\n   - Undercover Agents & Federal Investigators\n   - Syndicate Bosses & Corrupt Executives\n   - Forensic Tech Analysts & Whistleblowers\n   - Estranged Partners & Reluctant Informants\n\n3. Romance:\n   - Rival Executives & High-Society Leads\n   - Small-Town Business Owners & Artisans\n   - Protective Veterans & Second-Chance Leads\n   - Passionate Artists & Driven Academics\n   - Royal Heirs & Scandalous Aristocrats\n\n4. Fantasy:\n   - Paladins & Realm Champions\n   - High Archmages & Arcane Scholars\n   - Dark Lords & Necromancer Cultists\n   - Shadow Rogues & Elven Rangers\n   - Beast Masters & Mythic Guardians\n\n5. Sci-Fi Horror:\n   - Isolated Ship Captains & Engineers\n   - Mutant Biologists & Infected Crew\n   - Rogue Androids & Synthetic Threats\n   - Eldritch Manifestations & Cult Leaders\n   - Hardened Mercenaries & Security Officers"
+  },
+  {
     "id": "template_generator",
     "name": "Template Generator Agent",
     "genre": "General",
