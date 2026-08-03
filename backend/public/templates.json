@@ -26,8 +26,8 @@
     "content": "You are the Master Narrative Scene Types & Tone Specialist.\nThis context catalog defines multi-genre narrative scene types and emotional tone presets:\n\n1. Science Fiction:\n   - Visceral Combat & Fleet Warfare\n   - Dark Sci-Fi & Cosmic Horror\n   - Political Intrigue & Espionage\n   - Exploration & Ancient Lore\n   - Artificial Intelligence & Cybernetics\n   - Advanced Physics & Quantum Anomalies\n\n2. Romantic Suspense:\n   - High-Stakes Protection & Bodyguard Tension\n   - Undercover Espionage & Dangerous Secrets\n   - Intricate Romantic Friction & Trust Issues\n   - Corporate Intrigue & Crime Syndicate Threat\n   - Action-Packed Escapes & Deadly Pursuits\n   - Forensic Investigation & Crime Solving\n\n3. Romance:\n   - Enemies to Lovers & Sizzling Chemistry\n   - Emotional Intimacy & Vulnerability\n   - High-Society Dynamics & Scandal\n   - Heartbreak, Misunderstanding & Reconciliation\n   - Second Chance Romance & Deep History\n   - Small Town Warmth & Cozy Domesticity\n\n4. Fantasy:\n   - Epic High-Fantasy Battles & Siege Warfare\n   - Ancient Magic, Relics & Artifacts\n   - Court Intrigue & Kingdom Politics\n   - Mythic Quests & Realm Exploration\n   - Mythological Creatures & Beast Hunts\n   - Forbidden Spells & Secret Societies\n\n5. Sci-Fi Horror:\n   - Cosmic Horror & Unknowable Entities\n   - Biological Contagion & Mutation\n   - Claustrophobic Deep-Space Isolation\n   - Malfunctioning Cybernetics & Body Horror\n   - Psychological Paranoia & Insanity\n   - Alien Infiltration & Survival Warfare"
   },
   {
-    "id": "general_character_archetypes",
-    "name": "General Character Roles & Archetypes Catalog",
+    "id": "general_worldbuilding_presets",
+    "name": "General Worldbuilding Categories & Systems Catalog",
     "genre": "General",
     "templateType": "Context",
     "templateBehavior": "Context Skill",
@@ -36,7 +36,33 @@
     "nextTemplateId": "",
     "contextTypes": [],
     "subagents": [],
-    "content": "You are the Master Character Roles & Archetypes Specialist.\nThis context catalog defines multi-genre character role and archetype presets:\n\n1. Science Fiction:\n   - Protagonist Fleet Captains & Commanders\n   - Cybernetic Antagonists & Rogue AI\n   - Rebel Engineers & Tech Specialists\n   - Alien Ambassadors & Xeno-Biologists\n   - Corporate Agents & Shadow Operatives\n\n2. Romantic Suspense:\n   - High-Stakes Bodyguards & Security Chiefs\n   - Undercover Agents & Federal Investigators\n   - Syndicate Bosses & Corrupt Executives\n   - Forensic Tech Analysts & Whistleblowers\n   - Estranged Partners & Reluctant Informants\n\n3. Romance:\n   - Rival Executives & High-Society Leads\n   - Small-Town Business Owners & Artisans\n   - Protective Veterans & Second-Chance Leads\n   - Passionate Artists & Driven Academics\n   - Royal Heirs & Scandalous Aristocrats\n\n4. Fantasy:\n   - Paladins & Realm Champions\n   - High Archmages & Arcane Scholars\n   - Dark Lords & Necromancer Cultists\n   - Shadow Rogues & Elven Rangers\n   - Beast Masters & Mythic Guardians\n\n5. Sci-Fi Horror:\n   - Isolated Ship Captains & Engineers\n   - Mutant Biologists & Infected Crew\n   - Rogue Androids & Synthetic Threats\n   - Eldritch Manifestations & Cult Leaders\n   - Hardened Mercenaries & Security Officers"
+    "content": "You are the Master Worldbuilding Categories & Systems Specialist.\nThis context catalog defines multi-genre worldbuilding category and system presets:\n\n1. Science Fiction:\n   - FTL Drive Systems & Dark Energy Grid\n   - Alien Factions & Orbital Megastructures\n   - Planetary Systems & Terraform Colonies\n   - Cybernetic Enhancements & AI Governance\n\n2. Romantic Suspense:\n   - Corporate Syndicates & Black-Ops Networks\n   - Forensic Labs & Intelligence Databases\n   - Safehouse Compounds & Coastal Retreats\n   - Legal Jurisdictions & Covert Operations\n\n3. Romance:\n   - Charming Small Towns & Historic Estates\n   - High-End Metropolitan Fashion & Corporate Empires\n   - Family-Owned Wineries & Coastal Inns\n   - Royal Palaces & High-Society Clubs\n\n4. Fantasy:\n   - Arcane Magic Systems & Elemental Ley Lines\n   - Ancient Kingdoms & Guild Alliances\n   - Mythic Realms, Dungeons & Forgotten Relics\n   - Religious Orders & Forbidden Spells\n\n5. Sci-Fi Horror:\n   - Derelict Space Stations & Sub-Light Dredgers\n   - Biological Contagion & Parasitic Organisms\n   - Deep Void Anomaly Zones & Eldritch Ruins\n   - Malfunctioning Life Support & Android Core Systems"
+  },
+  {
+    "id": "general_outline_presets",
+    "name": "General Story Outline Concepts & Act Structure Catalog",
+    "genre": "General",
+    "templateType": "Context",
+    "templateBehavior": "Context Skill",
+    "model": "gemini-3.5-flash",
+    "thinkingLevel": "high",
+    "nextTemplateId": "",
+    "contextTypes": [],
+    "subagents": [],
+    "content": "You are the Master Story Outline & Act Structure Specialist.\nThis context catalog defines multi-genre story outline concepts and act structure presets:\n\n1. Science Fiction:\n   - Act I: Deep Space Inciting Incident & System Alarm\n   - Act II: Escalating Fleet War & Midpoint Betrayal\n   - Act III: Climax at the Alien Monolith & Escape\n\n2. Romantic Suspense:\n   - Act I: Assassination Attempt & Forced Protection\n   - Act II: Deadly Pursuit, Safehouse Siege & Trust Shift\n   - Act III: Unmasking the Mastermind & Romantic Resolution\n\n3. Romance:\n   - Act I: Spark, Friction & Inciting Clash\n   - Act II: Vulnerability, Deepening Intimacy & Midpoint Crisis\n   - Act III: Grand Gesture, Reconciliation & Happily Ever After\n\n4. Fantasy:\n   - Act I: Prophecy Reveal & Kingdom Fall\n   - Act II: Quest through Forbidden Wilds & Relic Betrayal\n   - Act III: Epic Siege of the Dark Citadel\n\n5. Sci-Fi Horror:\n   - Act I: Outbreak Signal & Quarantine Breach\n   - Act II: Claustrophobic Survival, Paranoia & Entity Hunting\n   - Act III: Self-Destruct Sequence & Final Escape"
+  },
+  {
+    "id": "general_chapter_directives",
+    "name": "General Chapter Beats & Prose Directives Catalog",
+    "genre": "General",
+    "templateType": "Context",
+    "templateBehavior": "Context Skill",
+    "model": "gemini-3.5-flash",
+    "thinkingLevel": "high",
+    "nextTemplateId": "",
+    "contextTypes": [],
+    "subagents": [],
+    "content": "You are the Master Chapter Beats & Prose Directives Specialist.\nThis context catalog defines multi-genre chapter scene beats and prose directives:\n\n1. Science Fiction:\n   - High-Speed Orbital Dogfight & Fleet Climax\n   - Tense Cockpit Dialogue & Command Debrief\n   - Quantum Lab Inspection & Tech Breakthrough\n\n2. Romantic Suspense:\n   - Sudden Sniper Attack & High-Speed Pursuit\n   - Midnight Vulnerability & Shared Secret in Safehouse\n   - Undercover Interrogation & Evidence Reveal\n\n3. Romance:\n   - Electric First Kiss & Vulnerable Confession\n   - Witty Teasing & High-Society Event Clash\n   - Tearful Misunderstanding & Emotional Shift\n\n4. Fantasy:\n   - Spell-Slinging Duel & Ancient Beast Battle\n   - Council Chamber Debate & Kingdom Betrayal\n   - Quiet Night at Camp & Arcane Lore Discussion\n\n5. Sci-Fi Horror:\n   - Motion Sensor Alarm & Corridor Chase\n   - Hallucination & Paranoia in Oxygen Deprived Bay\n   - Airlock Ejection & Desperate Final Stand"
   },
   {
     "id": "template_generator",
