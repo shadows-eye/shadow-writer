@@ -60,6 +60,8 @@ const CharacterElementSchema = new mongoose.Schema({
   id: { type: String, unique: true, required: true },
   name: String,
   type: String,
+  entityType: { type: String, default: 'characters' },
+  isDefault: { type: Boolean, default: false },
   prefix: String,
   suffix: String,
   details: String,
@@ -417,20 +419,23 @@ async function seedDatabaseIfEmpty() {
     }
   }
 
-  // 6. Seed Character Elements
-  const charCount = await CharacterElement.countDocuments();
-  if (charCount === 0) {
-    const charPath = path.join(__dirname, 'public', 'characterElements.json');
-    if (fs.existsSync(charPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(charPath, 'utf8'));
-        if (data && data.length > 0) {
-          await CharacterElement.insertMany(data);
-          console.log(`✓ Auto-seeded ${data.length} character elements into MongoDB.`);
+  // 6. Seed / Sync Document Elements
+  const charPath = path.join(__dirname, 'public', 'characterElements.json');
+  if (fs.existsSync(charPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(charPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const item of data) {
+          await CharacterElement.updateOne(
+            { id: item.id },
+            { $set: item },
+            { upsert: true }
+          );
         }
-      } catch (err) {
-        console.error('Failed to auto-seed character elements:', err);
+        console.log(`✓ Auto-seeded / synced ${data.length} document elements into MongoDB.`);
       }
+    } catch (err) {
+      console.error('Failed to auto-seed document elements:', err);
     }
   }
 

@@ -1,51 +1,245 @@
 [
   {
     "id": "species",
-    "name": "Species",
+    "name": "Species / Race",
     "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
     "prefix": "- **Species**: ",
     "suffix": "\n"
   },
   {
     "id": "age",
     "name": "Age",
-    "type": "number",
+    "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
     "prefix": "- **Age**: ",
-    "suffix": " cycles\n"
+    "suffix": "\n"
   },
   {
     "id": "rank",
-    "name": "Rank/Clearance",
+    "name": "Rank / Clearance",
     "type": "string",
-    "prefix": "- **Rank/Clearance**: ",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "- **Rank**: ",
     "suffix": "\n"
   },
   {
     "id": "physical_desc",
     "name": "Physical Description",
-    "type": "string",
-    "prefix": "- **Physical Description**: ",
-    "suffix": "\n"
+    "type": "textarea",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "\n## Physical Description\n",
+    "suffix": "\n\n---\n"
   },
   {
     "id": "background",
     "name": "Background & Role",
     "type": "textarea",
+    "entityType": "characters",
+    "isDefault": true,
     "prefix": "\n## Background & Role\n",
-    "suffix": "\n"
+    "suffix": "\n\n---\n"
   },
   {
     "id": "conflict",
-    "name": "Novel Conflict",
+    "name": "Conflict",
     "type": "textarea",
+    "entityType": "characters",
+    "isDefault": true,
     "prefix": "\n## Conflict\n",
-    "suffix": "\n"
+    "suffix": "\n\n---\n"
   },
   {
     "id": "key_relationships",
     "name": "Key Relationships",
     "type": "textarea",
+    "entityType": "characters",
+    "isDefault": true,
     "prefix": "\n## Key Relationships\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "classification",
+    "name": "Tech Classification",
+    "type": "string",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "- **Classification**: ",
     "suffix": "\n"
+  },
+  {
+    "id": "origin",
+    "name": "Origin / Creator",
+    "type": "string",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "- **Origin**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "energy_source",
+    "name": "Power / Energy Source",
+    "type": "string",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "- **Energy Source**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "capabilities",
+    "name": "Capabilities & Weaponry",
+    "type": "textarea",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "\n## Capabilities & Weaponry\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "vulnerabilities",
+    "name": "Vulnerabilities & Limits",
+    "type": "textarea",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "\n## Vulnerabilities & Limits\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "historical_impact",
+    "name": "Historical Impact",
+    "type": "textarea",
+    "entityType": "technology",
+    "isDefault": true,
+    "prefix": "\n## Historical Impact\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "faction_name",
+    "name": "Faction / Species Name",
+    "type": "string",
+    "entityType": "races",
+    "isDefault": true,
+    "prefix": "- **Faction Name**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "homeworld",
+    "name": "Homeworld",
+    "type": "string",
+    "entityType": "races",
+    "isDefault": true,
+    "prefix": "- **Homeworld**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "governance",
+    "name": "Governance",
+    "type": "string",
+    "entityType": "races",
+    "isDefault": true,
+    "prefix": "- **Governance**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "culture",
+    "name": "Culture & Ideology",
+    "type": "textarea",
+    "entityType": "races",
+    "isDefault": true,
+    "prefix": "\n## Culture & Ideology\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "military",
+    "name": "Military Assets",
+    "type": "textarea",
+    "entityType": "races",
+    "isDefault": true,
+    "prefix": "\n## Military Assets\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "system_name",
+    "name": "Sector / Star System",
+    "type": "string",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "- **System Name**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "climate",
+    "name": "Environment / Climate",
+    "type": "string",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "- **Climate**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "strategic_value",
+    "name": "Strategic Value",
+    "type": "textarea",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "\n## Strategic Value\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "landmarks",
+    "name": "Landmarks & Outposts",
+    "type": "textarea",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "\n## Landmarks & Outposts\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "history",
+    "name": "Historical Events",
+    "type": "textarea",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "\n## Historical Events\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "chapter_content",
+    "name": "Chapter Content / Prose",
+    "type": "textarea",
+    "entityType": "chapters",
+    "isDefault": true,
+    "prefix": "\n",
+    "suffix": "\n"
+  },
+  {
+    "id": "category",
+    "name": "Note Category / Topic",
+    "type": "string",
+    "entityType": "notes",
+    "isDefault": true,
+    "prefix": "- **Category**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "summary",
+    "name": "Summary / Outline",
+    "type": "textarea",
+    "entityType": "notes",
+    "isDefault": true,
+    "prefix": "\n## Summary\n",
+    "suffix": "\n\n---\n"
+  },
+  {
+    "id": "description",
+    "name": "Description & Notes",
+    "type": "textarea",
+    "entityType": "all",
+    "isDefault": true,
+    "prefix": "\n## Description & Notes\n",
+    "suffix": "\n\n---\n"
   }
 ]
