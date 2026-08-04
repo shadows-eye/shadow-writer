@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.7.0] - Unreleased
+
+### Added
+- **Database Migration Utilities** `[feat-Layland]`: Added new migration scripts (`migrate_character_attributes.js`, `fix_content.js`) to transition unstructured character data to discrete attributes, split `rank_clearance`, and purge legacy injected markdown from documents.
+
+### Changed
+- **Element Schema Overhaul** `[feat-Layland]`: Updated default `characterElements.json` to formally declare `Race`, `Rank`, `Clearance`, and `Traits` as dedicated entity structures.
+- **MongoDB Empty Attribute Deletions** `[feat-Layland]`: Enhanced the backend document update logic to explicitly process and `$unset` null/empty Map keys via `doc.attributes.delete()`, preventing zombie keys from lingering.
+
 ## [1.5.0] - 2026-07-17
 
 ### Added

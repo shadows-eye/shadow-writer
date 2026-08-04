@@ -84,15 +84,36 @@ async function resolveContextData(projectId, contextList) {
 
 async function saveArtifact(projectId, type, id, content, orderIndex = null) {
   try {
-    const { sanitizeAndStructureContent } = require('./mongoDB');
-    const { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    let { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
+
+    const targetType = attributes.type || normType;
+    if (typeof constructMarkdownFromAttributes === 'function') {
+      const reconstructed = constructMarkdownFromAttributes(normName, targetType, attributes);
+      if (reconstructed) cleanContent = reconstructed;
+    }
 
     if (normType === 'chapter') {
-      await Chapter.findOneAndUpdate(
-        { projectId, id: normId },
-        { content: cleanContent, attributes, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
-        { upsert: true }
-      );
+      const existingChap = await Chapter.findOne({ projectId, id: normId });
+      if (existingChap && existingChap.content && existingChap.content.trim().length > 0) {
+        const pendingDiff = {
+          prePromptContent: existingChap.content,
+          newDocText: cleanContent,
+          userPrompt: 'Chapter rewrite via Pipeline',
+          timestamp: new Date()
+        };
+        await Chapter.findOneAndUpdate(
+          { projectId, id: normId },
+          { pendingDiff, attributes, lastEdited: new Date() }
+        );
+        console.log(`[agentEngine] Existing chapter '${normId}' rewritten. Saved as Pending Review artifact.`);
+      } else {
+        await Chapter.findOneAndUpdate(
+          { projectId, id: normId },
+          { content: cleanContent, pendingDiff: null, attributes, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
+          { upsert: true }
+        );
+      }
     } else if (normType === 'character') {
       await Character.findOneAndUpdate(
         { projectId, id: normId },
@@ -106,10 +127,9 @@ async function saveArtifact(projectId, type, id, content, orderIndex = null) {
         { upsert: true }
       );
     } else {
-      const noteType = attributes.type || normType || 'note';
       await Note.findOneAndUpdate(
         { projectId, id: normId },
-        { name: normName, type: noteType, content: cleanContent, attributes, lastEdited: new Date() },
+        { name: normName, type: targetType || 'note', content: cleanContent, attributes, lastEdited: new Date() },
         { upsert: true }
       );
     }
