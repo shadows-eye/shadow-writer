@@ -540,7 +540,14 @@ function parseContentToAttributes(content, type) {
 function constructMarkdownFromAttributes(name, type, attributes = {}) {
   let md = `# ${name || 'Untitled'}\n\n`;
 
-  const attrsObj = attributes instanceof Map ? Object.fromEntries(attributes) : (attributes || {});
+  let attrsObj = {};
+  if (attributes && typeof attributes.toJSON === 'function') {
+    attrsObj = attributes.toJSON();
+  } else if (attributes && typeof attributes.entries === 'function') {
+    try { attrsObj = Object.fromEntries(attributes.entries()); } catch (e) { attrsObj = {}; }
+  } else if (attributes && typeof attributes === 'object' && !Array.isArray(attributes)) {
+    attrsObj = attributes;
+  }
 
   const cleanAttr = (val) => {
     if (!val) return '';
