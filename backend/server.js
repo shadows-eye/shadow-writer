@@ -587,6 +587,35 @@ app.get('/api/characters', async (req, res) => {
   }
 });
 
+app.get('/api/characters/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  const pId = projectId || 'global';
+
+  try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    let doc = await Character.findOne({ projectId: pId, id });
+    if (!doc) {
+      doc = await Character.findOne({ id });
+    }
+    if (!doc) {
+      return res.status(404).json({ error: 'Character not found' });
+    }
+    const cleaned = await ensureCleanDocumentOnRead(doc, 'character');
+    res.json({
+      id: cleaned.id,
+      name: cleaned.name || cleaned.id,
+      species: cleaned.species || 'Unknown',
+      age: cleaned.age || 'Unknown',
+      attributes: cleaned.attributes || {},
+      content: cleaned.content
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch character' });
+  }
+});
+
 app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
   const { content, attributes: inputAttrs, projectId } = req.body;
@@ -594,7 +623,7 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys } = require('./mongoDB');
     const existingChar = await Character.findOne({ projectId: pId, id });
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
@@ -607,18 +636,12 @@ app.post('/api/characters/:id', async (req, res) => {
       if (reconstructed) cleanContent = reconstructed;
     }
 
-    await Character.findOneAndUpdate(
-      { projectId: pId, id },
-      { 
-        content: cleanContent,
-        name: charName || (existingChar ? existingChar.name : id),
-        species: mergedAttrs['species'] || 'Unknown',
-        age: mergedAttrs['age'] || 'Unknown',
-        attributes: mergedAttrs,
-        lastEdited: new Date()
-      },
-      { upsert: true }
-    );
+    const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
+    updatedChar.name = charName || (existingChar ? existingChar.name : id);
+    updatedChar.species = mergedAttrs['species'] || 'Unknown';
+    updatedChar.age = mergedAttrs['age'] || 'Unknown';
+    updatedChar.content = cleanContent;
+    await updatedChar.save();
 
     // Save to History
     await History.create({

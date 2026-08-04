@@ -557,6 +557,29 @@ function sanitizeAttributesObj(rawAttrs) {
   return clean;
 }
 
+async function updateDocumentAttributeKeys(Model, projectId, id, attributeUpdates = {}) {
+  const pId = projectId || 'global';
+  const cleanUpdates = sanitizeAttributesObj(attributeUpdates);
+  
+  if (Object.keys(cleanUpdates).length === 0) {
+    return await Model.findOne({ projectId: pId, id });
+  }
+
+  const setObj = {};
+  for (const [k, v] of Object.entries(cleanUpdates)) {
+    setObj[`attributes.${k}`] = v;
+  }
+  setObj['lastEdited'] = new Date();
+
+  const doc = await Model.findOneAndUpdate(
+    { projectId: pId, id },
+    { $set: setObj },
+    { upsert: true, new: true }
+  );
+
+  return doc;
+}
+
 function constructMarkdownFromAttributes(name, type, attributes = {}) {
   let md = `# ${name || 'Untitled'}\n\n`;
   const attrsObj = sanitizeAttributesObj(attributes);
@@ -825,6 +848,7 @@ module.exports = {
   extractAttributesAndContent,
   sanitizeAndStructureContent,
   sanitizeAttributesObj,
+  updateDocumentAttributeKeys,
   ensureCleanDocumentOnRead,
   cleanDatabaseOnStartup,
   findProject,
