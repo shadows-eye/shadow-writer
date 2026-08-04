@@ -1,11 +1,11 @@
 [
   {
-    "id": "species",
-    "name": "Species / Race",
+    "id": "race",
+    "name": "Race",
     "type": "string",
     "entityType": "characters",
     "isDefault": true,
-    "prefix": "- **Species**: ",
+    "prefix": "- **Race**: ",
     "suffix": "\n"
   },
   {
@@ -19,11 +19,29 @@
   },
   {
     "id": "rank",
-    "name": "Rank / Clearance",
+    "name": "Rank",
     "type": "string",
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Rank**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "clearance",
+    "name": "Clearance",
+    "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "- **Clearance**: ",
+    "suffix": "\n"
+  },
+  {
+    "id": "traits",
+    "name": "Traits",
+    "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "- **Traits**: ",
     "suffix": "\n"
   },
   {

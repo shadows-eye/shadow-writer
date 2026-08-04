@@ -106,7 +106,7 @@ const CharacterSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
   name: String,
-  species: String,
+  race: String,
   age: String,
   attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic attributes
   content: String,
@@ -626,17 +626,19 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
   const normType = (type || '').toLowerCase();
 
   if (normType === 'character' || normType === 'characters') {
-    const species = cleanAttr(attrsObj.species);
+    const race = cleanAttr(attrsObj.race);
     const age = cleanAttr(attrsObj.age);
     const rank = cleanAttr(attrsObj.rank);
+    const clearance = cleanAttr(attrsObj.clearance);
     const physical_desc = cleanAttr(attrsObj.physical_desc);
     const background = cleanAttr(attrsObj.background);
     const conflict = cleanAttr(attrsObj.conflict);
     const key_relationships = cleanAttr(attrsObj.key_relationships);
 
-    if (species) md += `- **Species**: ${species}\n`;
+    if (race) md += `- **Race**: ${race}\n`;
     if (age) md += `- **Age**: ${age}\n`;
-    if (rank) md += `- **Rank/Clearance**: ${rank}\n`;
+    if (rank) md += `- **Rank**: ${rank}\n`;
+    if (clearance) md += `- **Clearance**: ${clearance}\n`;
     if (physical_desc) md += `- **Physical Description**: ${physical_desc}\n`;
 
     md += `\n---\n\n`;
@@ -727,7 +729,7 @@ async function migrateExistingCharacters() {
 
         const attrs = await parseCharacterAttributes(char.content);
         char.name = name;
-        char.species = attrs['species'] || 'Unknown';
+        char.race = attrs['race'] || 'Unknown';
         char.age = attrs['age'] || 'Unknown';
         char.attributes = attrs;
         await char.save();
