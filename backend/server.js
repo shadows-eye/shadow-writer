@@ -628,19 +628,21 @@ app.post('/api/characters/:id', async (req, res) => {
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
-    const mergedAttrs = sanitizeAttributesObj({ ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) });
-
-    // Reconstruct clean markdown content from merged attributes
-    if (typeof constructMarkdownFromAttributes === 'function') {
-      const reconstructed = constructMarkdownFromAttributes(charName || (existingChar ? existingChar.name : id), 'character', mergedAttrs);
-      if (reconstructed) cleanContent = reconstructed;
+    if (inputAttrs && Object.keys(inputAttrs).length > 0) {
+        delete parsedAttrs.unstructured;
     }
+    const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
+
+    console.log(`[DEBUG] Updating character ${id}`);
+    console.log(`[DEBUG] Input Attrs:`, inputAttrs);
+    console.log(`[DEBUG] Merged Attrs:`, mergedAttrs);
 
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
+    const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
     updatedChar.name = charName || (existingChar ? existingChar.name : id);
-    updatedChar.species = mergedAttrs['species'] || 'Unknown';
-    updatedChar.age = mergedAttrs['age'] || 'Unknown';
-    updatedChar.content = cleanContent;
+    updatedChar.species = finalCleanAttrs['species'] || 'Unknown';
+    updatedChar.age = finalCleanAttrs['age'] || 'Unknown';
+    updatedChar.content = "";
     await updatedChar.save();
 
     // Save to History
@@ -699,7 +701,10 @@ app.post('/api/chapters/:id', async (req, res) => {
     const updateData = { orderIndex, lastEdited: new Date() };
     if (content) {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
-      updateData.content = cleanContent;
+      if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
+          delete attributes.unstructured;
+      }
+      updateData.content = "";
       updateData.attributes = attributes;
     }
     if (clearPendingDiff) {
@@ -771,23 +776,37 @@ app.post('/api/notes/:id', async (req, res) => {
     const existingNote = await Note.findOne({ projectId: pId, id });
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
-    let { id: normId, type: normType, name: normName, attributes: inferredAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
-    const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
-    const mergedAttributes = sanitizeAttributesObj({ ...(existingAttrsObj || {}), ...(inferredAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType });
-
-    if (typeof constructMarkdownFromAttributes === 'function') {
-      const reconstructed = constructMarkdownFromAttributes(normName || (existingNote ? existingNote.name : id), targetType, mergedAttributes);
-      if (reconstructed) cleanContent = reconstructed;
+    let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
+    if (reqAttributes && Object.keys(reqAttributes).length > 0) {
+        delete parsedAttrs.unstructured;
     }
+    const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
+    const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
 
     let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));
     if (!note) {
       note = new Note({ projectId: pId, id: normId });
     }
+    if (!note.attributes) note.attributes = {};
+    for (const [k, v] of Object.entries(mergedAttributes)) {
+      if (v === '' || v === null || v === undefined) {
+        if (note.attributes && typeof note.attributes.delete === 'function') {
+            note.attributes.delete(k);
+        } else {
+            note.set(`attributes.${k}`, undefined);
+        }
+      } else {
+        if (note.attributes && typeof note.attributes.set === 'function') {
+            note.attributes.set(k, v);
+        } else {
+            note.set(`attributes.${k}`, v);
+        }
+      }
+    }
+    
     note.name = normName || note.name || id;
     note.type = targetType;
-    note.content = cleanContent;
-    note.attributes = mergedAttributes;
+    note.content = "";
     note.markModified('attributes');
     note.lastEdited = new Date();
     await note.save();

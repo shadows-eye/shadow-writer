@@ -41,8 +41,7 @@ async function migrateAllDocuments() {
       doc.attributes = mergedAttrs;
       doc.markModified('attributes');
       
-      const reconstructedContent = constructMarkdownFromAttributes(doc.name || doc.id, doc.type || 'notes', mergedAttrs);
-      if (reconstructedContent) doc.content = reconstructedContent;
+      doc.content = "";
       
       await doc.save();
       noteCount++;
@@ -61,8 +60,7 @@ async function migrateAllDocuments() {
       doc.attributes = mergedAttrs;
       doc.markModified('attributes');
       
-      const reconstructedContent = constructMarkdownFromAttributes(doc.name || doc.id, 'characters', mergedAttrs);
-      if (reconstructedContent) doc.content = reconstructedContent;
+      doc.content = "";
       
       await doc.save();
       charCount++;
@@ -81,8 +79,7 @@ async function migrateAllDocuments() {
       doc.attributes = mergedAttrs;
       doc.markModified('attributes');
       
-      const reconstructedContent = constructMarkdownFromAttributes(doc.id, 'chapters', mergedAttrs);
-      if (reconstructedContent) doc.content = reconstructedContent;
+      doc.content = "";
       
       await doc.save();
       chapCount++;
@@ -101,8 +98,7 @@ async function migrateAllDocuments() {
       doc.attributes = mergedAttrs;
       doc.markModified('attributes');
       
-      const reconstructedContent = constructMarkdownFromAttributes(doc.name || doc.id, doc.type || 'artifact', mergedAttrs);
-      if (reconstructedContent) doc.content = reconstructedContent;
+      doc.content = "";
       
       await doc.save();
       artCount++;

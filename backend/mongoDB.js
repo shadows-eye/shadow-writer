@@ -319,6 +319,10 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
     }
   }
 
+  if (content && content.trim() !== '') {
+    attributes.unstructured = content.trim();
+  }
+
   return {
     id: normalizedId,
     type: normalizedType,
@@ -527,7 +531,8 @@ function parseContentToAttributes(content, type) {
   });
 
   const sections = String(content).split(/^## /m);
-  sections.forEach(sec => {
+  sections.forEach((sec, idx) => {
+    if (idx === 0) return;
     const secLines = sec.trim().split('\n');
     const header = secLines[0].trim();
     const body = secLines.slice(1).join('\n').trim();
@@ -556,7 +561,9 @@ function sanitizeAttributesObj(rawAttrs) {
   const clean = {};
   for (const [k, v] of Object.entries(obj)) {
     if (k && !k.startsWith('$') && !k.startsWith('_') && typeof v !== 'function') {
-      clean[k] = v;
+      if (v !== '' && v !== null && v !== undefined) {
+        clean[k] = v;
+      }
     }
   }
   return clean;
@@ -564,25 +571,42 @@ function sanitizeAttributesObj(rawAttrs) {
 
 async function updateDocumentAttributeKeys(Model, projectId, id, attributeUpdates = {}) {
   const pId = projectId || 'global';
-  const cleanUpdates = sanitizeAttributesObj(attributeUpdates);
+  // Note: We DO NOT run sanitizeAttributesObj here anymore, because we WANT to see which keys are null/empty
+  // so we can explicitly delete them from the Mongoose Map!
   
-  if (Object.keys(cleanUpdates).length === 0) {
-    return await Model.findOne({ projectId: pId, id });
+  let doc = await Model.findOne({ projectId: pId, id });
+  if (!doc) {
+    doc = new Model({ projectId: pId, id });
+  }
+  
+  if (!doc.attributes) doc.attributes = {};
+
+  // For Mongoose Maps, we must explicitly delete keys that are null, empty, or undefined.
+  for (const [k, v] of Object.entries(attributeUpdates)) {
+    if (k && !k.startsWith('$') && !k.startsWith('_') && typeof v !== 'function') {
+      if (v === '' || v === null || v === undefined) {
+        console.log(`[DEBUG MONGODB] Attempting to delete key: ${k}`);
+        if (doc.attributes && typeof doc.attributes.delete === 'function') {
+            doc.attributes.delete(k);
+            console.log(`[DEBUG MONGODB] Used .delete() on Map for ${k}`);
+        } else {
+            doc.set(`attributes.${k}`, undefined);
+            console.log(`[DEBUG MONGODB] Used .set(undefined) for ${k}`);
+        }
+      } else {
+        if (doc.attributes && typeof doc.attributes.set === 'function') {
+            doc.attributes.set(k, v);
+        } else {
+            doc.set(`attributes.${k}`, v);
+        }
+      }
+    }
   }
 
-  const setObj = {};
-  for (const [k, v] of Object.entries(cleanUpdates)) {
-    setObj[`attributes.${k}`] = v;
-  }
-  setObj['lastEdited'] = new Date();
-
-  const doc = await Model.findOneAndUpdate(
-    { projectId: pId, id },
-    { $set: setObj },
-    { upsert: true, new: true }
-  );
-
-  return doc;
+  doc.markModified('attributes');
+  const saveResult = await doc.save();
+  console.log(`[DEBUG MONGODB] Document saved. Final attributes:`, saveResult.attributes);
+  return saveResult;
 }
 
 function constructMarkdownFromAttributes(name, type, attributes = {}) {
@@ -697,13 +721,7 @@ async function migrateExistingCharacters() {
     const characters = await Character.find({});
     let count = 0;
     for (const char of characters) {
-      if (char.attributes && Object.keys(char.attributes).length > 0) {
-        // Attributes exist in DB as source of truth -> reconstruct clean markdown
-        const cleanContent = constructMarkdownFromAttributes(char.name || char.id, 'character', char.attributes);
-        if (cleanContent) char.content = cleanContent;
-        await char.save();
-        count++;
-      } else if (char.content) {
+      if (char.content) {
         const nameMatch = char.content.match(/^\s*#\s+(.+)$/m);
         const name = nameMatch ? nameMatch[1].trim() : char.id;
 
@@ -712,7 +730,6 @@ async function migrateExistingCharacters() {
         char.species = attrs['species'] || 'Unknown';
         char.age = attrs['age'] || 'Unknown';
         char.attributes = attrs;
-        char.content = constructMarkdownFromAttributes(name, 'character', attrs);
         await char.save();
         count++;
       }
@@ -786,35 +803,6 @@ async function cleanDatabaseOnStartup() {
   console.log('🔍 Running MongoDB startup data hygiene scan...');
   let cleanedCount = 0;
   try {
-    const notes = await Note.find({});
-    for (const doc of notes) {
-      if (doc.attributes) {
-        let subType = doc.type || 'note';
-        if (doc.id.startsWith('races-')) subType = 'races';
-        else if (doc.id.startsWith('systems-') || doc.id.startsWith('locations-')) subType = 'locations';
-        else if (doc.id.startsWith('tech-')) subType = 'technology';
-
-        const cleanContent = constructMarkdownFromAttributes(doc.name || doc.id, subType, doc.attributes);
-        if (cleanContent && cleanContent !== doc.content) {
-          doc.content = cleanContent;
-          await doc.save();
-          cleanedCount++;
-        }
-      }
-    }
-
-    const characters = await Character.find({});
-    for (const doc of characters) {
-      if (doc.attributes) {
-        const cleanContent = constructMarkdownFromAttributes(doc.name || doc.id, 'character', doc.attributes);
-        if (cleanContent && cleanContent !== doc.content) {
-          doc.content = cleanContent;
-          await doc.save();
-          cleanedCount++;
-        }
-      }
-    }
-
     const chapters = await Chapter.find({});
     for (const doc of chapters) {
       if (!doc.content) continue;
