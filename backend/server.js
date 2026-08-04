@@ -594,11 +594,12 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj } = require('./mongoDB');
     const existingChar = await Character.findOne({ projectId: pId, id });
+    const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
-    const mergedAttrs = { ...(existingChar ? existingChar.attributes : {}), ...parsedAttrs, ...(inputAttrs || {}) };
+    const mergedAttrs = sanitizeAttributesObj({ ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) });
 
     // Reconstruct clean markdown content from merged attributes
     if (typeof constructMarkdownFromAttributes === 'function') {
@@ -632,7 +633,7 @@ app.post('/api/characters/:id', async (req, res) => {
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving character:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: err.message, stack: err.stack });
   }
 });
 
@@ -743,13 +744,13 @@ app.post('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj } = require('./mongoDB');
     const existingNote = await Note.findOne({ projectId: pId, id });
-    const existingAttrsObj = existingNote ? (existingNote.attributes instanceof Map ? Object.fromEntries(existingNote.attributes) : (existingNote.attributes || {})) : {};
+    const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
     let { id: normId, type: normType, name: normName, attributes: inferredAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
-    const mergedAttributes = { ...(existingAttrsObj || {}), ...(inferredAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+    const mergedAttributes = sanitizeAttributesObj({ ...(existingAttrsObj || {}), ...(inferredAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType });
 
     if (typeof constructMarkdownFromAttributes === 'function') {
       const reconstructed = constructMarkdownFromAttributes(normName || (existingNote ? existingNote.name : id), targetType, mergedAttributes);

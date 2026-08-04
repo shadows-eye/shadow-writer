@@ -537,17 +537,29 @@ function parseContentToAttributes(content, type) {
   return attributes;
 }
 
+function sanitizeAttributesObj(rawAttrs) {
+  let obj = {};
+  if (!rawAttrs) return {};
+  if (typeof rawAttrs.toJSON === 'function') {
+    try { obj = rawAttrs.toJSON(); } catch (e) { obj = {}; }
+  } else if (typeof rawAttrs.entries === 'function') {
+    try { obj = Object.fromEntries(rawAttrs.entries()); } catch (e) { obj = {}; }
+  } else if (typeof rawAttrs === 'object' && !Array.isArray(rawAttrs)) {
+    obj = rawAttrs;
+  }
+
+  const clean = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k && !k.startsWith('$') && !k.startsWith('_') && typeof v !== 'function') {
+      clean[k] = v;
+    }
+  }
+  return clean;
+}
+
 function constructMarkdownFromAttributes(name, type, attributes = {}) {
   let md = `# ${name || 'Untitled'}\n\n`;
-
-  let attrsObj = {};
-  if (attributes && typeof attributes.toJSON === 'function') {
-    attrsObj = attributes.toJSON();
-  } else if (attributes && typeof attributes.entries === 'function') {
-    try { attrsObj = Object.fromEntries(attributes.entries()); } catch (e) { attrsObj = {}; }
-  } else if (attributes && typeof attributes === 'object' && !Array.isArray(attributes)) {
-    attrsObj = attributes;
-  }
+  const attrsObj = sanitizeAttributesObj(attributes);
 
   const cleanAttr = (val) => {
     if (!val) return '';
@@ -812,6 +824,7 @@ module.exports = {
   migrateExistingCharacters,
   extractAttributesAndContent,
   sanitizeAndStructureContent,
+  sanitizeAttributesObj,
   ensureCleanDocumentOnRead,
   cleanDatabaseOnStartup,
   findProject,
