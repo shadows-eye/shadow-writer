@@ -23,11 +23,30 @@ mongoose.connect(mongoUri)
     for (const modelInfo of models) {
         const Model = mongoose.model(modelInfo.name, GenericSchema, modelInfo.collectionName);
         const docs = await Model.find({});
-        console.log(`\nFound ${docs.length} documents in ${modelInfo.collectionName} collection.`);
+        
+        // Pre-filter documents that actually need structural mapping
+        const docsToMigrate = docs.filter(doc => {
+            const rawObj = doc.toObject();
+            const legacyFields = Object.keys(rawObj).filter(k => !coreFields.includes(k));
+            const hasLegacyFields = legacyFields.length > 0;
+            const hasAttributes = rawObj.attributes && Object.keys(rawObj.attributes).length > 0;
+            return hasLegacyFields || !hasAttributes;
+        });
+
+        console.log(`\n--- [${modelInfo.collectionName.toUpperCase()}] ---`);
+        console.log(`Found ${docs.length} total documents.`);
+        
+        if (docsToMigrate.length === 0) {
+            console.log(`✓ All documents are already perfectly structured. Skipping.`);
+            continue;
+        }
+
+        console.log(`⚠️  Identified ${docsToMigrate.length} documents requiring Gemini structural mapping.`);
 
         let migratedInCollection = 0;
 
-        for (let doc of docs) {
+        for (let i = 0; i < docsToMigrate.length; i++) {
+            const doc = docsToMigrate[i];
             try {
                 const rawObj = doc.toObject();
                 
@@ -38,24 +57,12 @@ mongoose.connect(mongoUri)
                         legacyFields[key] = rawObj[key];
                     }
                 }
-                
-                const hasLegacyFields = Object.keys(legacyFields).length > 0;
-                const hasAttributes = rawObj.attributes && Object.keys(rawObj.attributes).length > 0;
-                
-                // Skip if the document is already structurally sound AND has some attributes mapped
-                if (!hasLegacyFields && hasAttributes) continue;
 
                 const docType = rawObj.type || modelInfo.name.toLowerCase();
                 const systemPrompt = "SYSTEM DIRECTIVE: You are an automatic data structurer. The user has provided an unstructured block of text for this document. Analyze the text and map it directly into a structured JSON schema appropriate for a " + docType + ". Output only valid JSON with the mapped attributes. Do not include markdown formatting or conversational text.";
-                const fullPrompt = `${systemPrompt}
+                const fullPrompt = `${systemPrompt}\n\nUnstructured Data (Legacy Database Fields):\n${JSON.stringify(legacyFields, null, 2)}\n\nPlain Text Content (Analyze this for attributes):\n${rawObj.content || 'No content provided.'}`;
 
-Unstructured Data (Legacy Database Fields):
-${JSON.stringify(legacyFields, null, 2)}
-
-Plain Text Content (Analyze this for attributes):
-${rawObj.content || 'No content provided.'}`;
-
-                console.log(`Sending doc ${rawObj.id || rawObj._id} to Gemini for auto-structuring...`);
+                console.log(`[${i + 1}/${docsToMigrate.length}] Sending doc "${rawObj.id || rawObj._id}" to Gemini for auto-structuring...`);
                 
                 let geminiResponse = await generateContent({ message: fullPrompt, model: 'gemini-3.5-flash' });
                 
@@ -93,7 +100,7 @@ ${rawObj.content || 'No content provided.'}`;
                 await doc.save();
                 migratedInCollection++;
                 totalMigrated++;
-                console.log(`Successfully auto-structured ${rawObj.id || rawObj._id}`);
+                console.log(`   ✓ Successfully structured "${rawObj.id || rawObj._id}"`);
                 
                 // Brief pause to avoid rate limits
                 await new Promise(res => setTimeout(res, 500));
