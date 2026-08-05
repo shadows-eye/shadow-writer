@@ -64,7 +64,7 @@ mongoose.connect(mongoUri)
 
                 console.log(`[${i + 1}/${docsToMigrate.length}] Sending doc "${rawObj.id || rawObj._id}" to Gemini for auto-structuring...`);
                 
-                let geminiResponse = await generateContent({ message: fullPrompt, model: 'gemini-3.5-flash' });
+                let geminiResponse = await generateContent(fullPrompt, 'gemini-3.5-flash');
                 
                 // Clean markdown code blocks
                 geminiResponse = geminiResponse.replace(/^```json\n/i, '').replace(/\n```$/, '').trim();
