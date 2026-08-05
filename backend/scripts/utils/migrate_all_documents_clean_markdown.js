@@ -5,27 +5,37 @@ const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/shadow_wr
 function cleanMarkdown(val) {
     if (!val || typeof val !== 'string') return val;
     let s = val.replace(/\\([*#_\-\[\]\(\)])/g, '$1').trim();
-    // Strip bullet-point bold headers (e.g. "- **Age**: ")
+    
+    // Strip bullet points that are bold headers
     s = s.replace(/^[\-\*]\s*\*\*[^*]+\*\*\:\s*/gm, '');
+    
     // Strip generic dividers
     s = s.replace(/\s*---\s*/g, '');
-    // Strip markdown headings (#, ##, ###, etc.)
-    s = s.replace(/^#{1,6}\s+/gm, '');
-    // Strip bold markers
-    s = s.replace(/(\*\*|__)(.*?)\1/g, '$2');
-    // Strip italic markers
-    s = s.replace(/(\*|_)(.*?)\1/g, '$2');
+    
+    // Strip all heading hashes that are followed by a space (e.g. "## ")
+    s = s.replace(/#{1,6}\s+/g, '');
+    
+    // Strip hashes that are glued to words or punctuation (like "cells.##Role")
+    s = s.replace(/#{1,6}/g, '');
+    
+    // Strip all bold markers indiscriminately
+    s = s.replace(/\*\*/g, '');
+    s = s.replace(/__/g, '');
+    
+    // Clean up multiple spaces that might have been left behind
+    s = s.replace(/  +/g, ' ');
+    
     return s.trim();
 }
 
 mongoose.connect(mongoUri)
   .then(async () => {
-    console.log('Connected to MongoDB for markdown migration (1.7.0 format)');
+    console.log('Connected to MongoDB for AGGRESSIVE markdown migration');
     
     const GenericSchema = new mongoose.Schema({
         projectId: { type: String, required: true },
         id: { type: String, required: true },
-        attributes: { type: Map, of: mongoose.Schema.Types.Mixed },
+        attributes: { type: mongoose.Schema.Types.Mixed }, // Use Mixed to handle both Maps and plain objects
         content: String,
         lastEdited: { type: Date, default: Date.now }
     }, { strict: false });
@@ -49,15 +59,35 @@ mongoose.connect(mongoUri)
         for (let doc of docs) {
             let changed = false;
 
-            // 1. Clean attributes
+            // 1. Clean attributes (handling both Mongoose Maps and plain objects)
             if (doc.attributes) {
-                for (const [key, value] of doc.attributes.entries()) {
-                    if (typeof value === 'string') {
-                        const cleaned = cleanMarkdown(value);
-                        if (cleaned !== value) {
-                            doc.attributes.set(key, cleaned);
-                            changed = true;
+                if (typeof doc.attributes.keys === 'function') {
+                    // It's a Mongoose Map
+                    for (const key of Array.from(doc.attributes.keys())) {
+                        const value = doc.attributes.get(key);
+                        if (typeof value === 'string') {
+                            const cleaned = cleanMarkdown(value);
+                            if (cleaned !== value) {
+                                doc.attributes.set(key, cleaned);
+                                changed = true;
+                            }
                         }
+                    }
+                } else if (typeof doc.attributes === 'object') {
+                    // It's a plain JS object
+                    for (const key of Object.keys(doc.attributes)) {
+                        const value = doc.attributes[key];
+                        if (typeof value === 'string') {
+                            const cleaned = cleanMarkdown(value);
+                            if (cleaned !== value) {
+                                doc.attributes[key] = cleaned;
+                                changed = true;
+                            }
+                        }
+                    }
+                    // Since it's a Mixed type, we need to tell Mongoose it changed
+                    if (changed) {
+                        doc.markModified('attributes');
                     }
                 }
             }
