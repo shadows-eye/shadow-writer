@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 const { generateContent } = require('../../geminiClient');
 
 const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/shadow_writer';
@@ -7,7 +9,15 @@ mongoose.connect(mongoUri)
   .then(async () => {
     console.log('Connected to MongoDB for Gemini-powered Structural Migration (1.7.0)');
     
-    // We use strict: false to access legacy top-level fields that are no longer in the schema
+    const elementsPath = path.join(__dirname, '../../public/characterElements.json');
+    const elementsData = JSON.parse(fs.readFileSync(elementsPath, 'utf8'));
+    
+    const schemas = {};
+    elementsData.forEach(element => {
+        if (!schemas[element.entityType]) schemas[element.entityType] = [];
+        schemas[element.entityType].push(element.id);
+    });
+    
     const GenericSchema = new mongoose.Schema({}, { strict: false });
 
     const models = [
@@ -24,13 +34,31 @@ mongoose.connect(mongoUri)
         const Model = mongoose.model(modelInfo.name, GenericSchema, modelInfo.collectionName);
         const docs = await Model.find({});
         
-        // Pre-filter documents that actually need structural mapping
+        const docType = modelInfo.collectionName;
+        const validKeys = [
+            ...(schemas[docType] || []),
+            ...(schemas['all'] || [])
+        ];
+        
         const docsToMigrate = docs.filter(doc => {
             const rawObj = doc.toObject();
             const legacyFields = Object.keys(rawObj).filter(k => !coreFields.includes(k));
             const hasLegacyFields = legacyFields.length > 0;
-            const hasAttributes = rawObj.attributes && Object.keys(rawObj.attributes).length > 0;
-            return hasLegacyFields || !hasAttributes;
+            
+            let hasPopulatedAttributes = false;
+            if (rawObj.attributes) {
+                hasPopulatedAttributes = Object.values(rawObj.attributes).some(val => val && val !== '');
+            }
+            
+            const hasUnmigratedContent = (rawObj.content && rawObj.content.trim().length > 0 && !hasPopulatedAttributes);
+            
+            let hasHallucinatedKeys = false;
+            if (rawObj.attributes) {
+                const existingKeys = Object.keys(rawObj.attributes);
+                hasHallucinatedKeys = existingKeys.some(k => !validKeys.includes(k) && k !== 'type' && k !== 'subtypeTag' && k !== 'category');
+            }
+            
+            return hasLegacyFields || hasUnmigratedContent || hasHallucinatedKeys;
         });
 
         console.log(`\n--- [${modelInfo.collectionName.toUpperCase()}] ---`);
@@ -50,51 +78,62 @@ mongoose.connect(mongoUri)
             try {
                 const rawObj = doc.toObject();
                 
-                // Extract legacy fields that need mapping
                 const legacyFields = {};
                 for (const key of Object.keys(rawObj)) {
                     if (!coreFields.includes(key)) {
                         legacyFields[key] = rawObj[key];
                     }
                 }
+                
+                const systemPrompt = `SYSTEM DIRECTIVE: You are an automatic data structurer. The user has provided an unstructured block of text. 
+Analyze the text and map it directly into a structured JSON schema. 
+CRITICAL RULE: You MUST output ONLY valid JSON containing EXACTLY these keys: [${validKeys.join(', ')}].
+Do not invent new keys. If a key is not mentioned in the text, leave its value as an empty string "".
+Do not include markdown formatting or conversational text.`;
 
-                const docType = rawObj.type || modelInfo.name.toLowerCase();
-                const systemPrompt = "SYSTEM DIRECTIVE: You are an automatic data structurer. The user has provided an unstructured block of text for this document. Analyze the text and map it directly into a structured JSON schema appropriate for a " + docType + ". Output only valid JSON with the mapped attributes. Do not include markdown formatting or conversational text.";
-                const fullPrompt = `${systemPrompt}\n\nUnstructured Data (Legacy Database Fields):\n${JSON.stringify(legacyFields, null, 2)}\n\nPlain Text Content (Analyze this for attributes):\n${rawObj.content || 'No content provided.'}`;
+                let textToProcess = rawObj.content || '';
+                // Since we're re-migrating, we need to collect all previously extracted content to feed back into Gemini
+                if (rawObj.attributes) {
+                    const extractedContent = Object.values(rawObj.attributes)
+                        .filter(val => typeof val === 'string' && val.length > 20)
+                        .join('\n');
+                    if (extractedContent) textToProcess += '\n' + extractedContent;
+                }
+
+                const fullPrompt = `${systemPrompt}\n\nUnstructured Data (Legacy Database Fields):\n${JSON.stringify(legacyFields, null, 2)}\n\nPlain Text Content (Analyze this for attributes):\n${textToProcess || 'No content provided.'}`;
 
                 console.log(`[${i + 1}/${docsToMigrate.length}] Sending doc "${rawObj.id || rawObj._id}" to Gemini for auto-structuring...`);
                 
                 let geminiResponse = await generateContent(fullPrompt, 'gemini-3.5-flash');
                 
-                // Clean markdown code blocks
                 geminiResponse = geminiResponse.replace(/^```json\n/i, '').replace(/\n```$/, '').trim();
                 geminiResponse = geminiResponse.replace(/^```\n/i, '').replace(/\n```$/, '').trim();
                 
                 const structuredData = JSON.parse(geminiResponse);
                 
-                // Ensure attributes map exists (init to empty object if undefined)
-                if (!doc.attributes) {
-                    doc.attributes = {};
+                // Build a completely fresh attributes object
+                const newAttributes = {};
+                
+                // Apply strict keys
+                for (const key of validKeys) {
+                    if (key === 'race' && legacyFields['race']) newAttributes.race = legacyFields['race'];
+                    else if (key === 'rank' && legacyFields['rank']) newAttributes.rank = legacyFields['rank'];
+                    else newAttributes[key] = structuredData[key] || '';
                 }
                 
-                // Clear old legacy fields from document root
+                // Keep structural markers
+                newAttributes.type = docType;
+                if (docType === 'characters') newAttributes.subtypeTag = 'characters';
+                if (rawObj.attributes && rawObj.attributes.category) newAttributes.category = rawObj.attributes.category;
+                
+                // Completely overwrite the attributes field
+                doc.set('attributes', newAttributes);
+                
                 for (const key of Object.keys(legacyFields)) {
                     doc.set(key, undefined);
                 }
                 
-                // Merge Gemini's structured mapping into attributes
-                for (const key of Object.keys(structuredData)) {
-                    // special old-system normalizations
-                    const finalKey = key === 'species' ? 'race' : key;
-                    
-                    if (finalKey === 'rank' && typeof structuredData[key] === 'string' && structuredData[key].includes('/')) {
-                        const parts = structuredData[key].split('/');
-                        doc.set(`attributes.rank`, parts[0].trim());
-                        doc.set(`attributes.clearance`, parts[1].trim());
-                    } else {
-                        doc.set(`attributes.${finalKey}`, structuredData[key]);
-                    }
-                }
+                doc.set('content', '');
                 
                 doc.markModified('attributes');
                 await doc.save();
@@ -102,7 +141,6 @@ mongoose.connect(mongoUri)
                 totalMigrated++;
                 console.log(`   ✓ Successfully structured "${rawObj.id || rawObj._id}"`);
                 
-                // Brief pause to avoid rate limits
                 await new Promise(res => setTimeout(res, 500));
             } catch (err) {
                 console.error(`Failed to auto-structure document ${doc.id}:`, err.message);
