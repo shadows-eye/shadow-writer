@@ -338,20 +338,35 @@ function extractAttributesAndContent(content) {
 }
 
 async function seedDatabaseIfEmpty() {
-  // 1. Seed Templates if empty
-  const countTemplates = await Template.countDocuments();
-  if (countTemplates === 0) {
-    const templatesPath = path.join(__dirname, 'public', 'templates.json');
-    if (fs.existsSync(templatesPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-        if (data && data.length > 0) {
-          await Template.insertMany(data);
-          console.log(`✓ Initialized ${data.length} templates from templates.json into MongoDB.`);
+  // 1. Seed / Sync Templates (always update from file)
+  const templatesPath = path.join(__dirname, 'public', 'templates.json');
+  if (fs.existsSync(templatesPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const t of data) {
+          await Template.updateOne(
+            { id: t.id },
+            { $set: {
+                name: t.name,
+                genre: t.genre,
+                templateType: t.templateType,
+                templateBehavior: t.templateBehavior,
+                nextTemplateId: t.nextTemplateId || '',
+                content: t.content,
+                model: t.model || 'gemini-3.5-flash',
+                thinkingLevel: t.thinkingLevel || 'high',
+                contextTypes: t.contextTypes || [],
+                subagents: t.subagents || [],
+                overrides: t.overrides
+            } },
+            { upsert: true }
+          );
         }
-      } catch (err) {
-        console.error('Failed to seed templates:', err);
+        console.log(`✓ Auto-seeded / synced ${data.length} templates from templates.json into MongoDB.`);
       }
+    } catch (err) {
+      console.error('Failed to sync templates:', err);
     }
   }
 

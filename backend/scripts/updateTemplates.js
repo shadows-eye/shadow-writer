@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const { Template } = require('./mongoDB');
+const { Template } = require('../mongoDB');
 
 async function main() {
   const templatesPath = path.join(__dirname, 'public', 'templates.json');
