@@ -65,9 +65,9 @@ ${rawObj.content || 'No content provided.'}`;
                 
                 const structuredData = JSON.parse(geminiResponse);
                 
-                // Ensure attributes map exists
-                if (!doc.attributes || typeof doc.attributes !== 'object' || typeof doc.attributes.keys === 'function') {
-                    doc.attributes = doc.attributes ? Object.fromEntries(doc.attributes) : {};
+                // Ensure attributes map exists (init to empty object if undefined)
+                if (!doc.attributes) {
+                    doc.attributes = {};
                 }
                 
                 // Clear old legacy fields from document root
@@ -82,10 +82,10 @@ ${rawObj.content || 'No content provided.'}`;
                     
                     if (finalKey === 'rank' && typeof structuredData[key] === 'string' && structuredData[key].includes('/')) {
                         const parts = structuredData[key].split('/');
-                        doc.attributes['rank'] = parts[0].trim();
-                        doc.attributes['clearance'] = parts[1].trim();
+                        doc.set(`attributes.rank`, parts[0].trim());
+                        doc.set(`attributes.clearance`, parts[1].trim());
                     } else {
-                        doc.attributes[finalKey] = structuredData[key];
+                        doc.set(`attributes.${finalKey}`, structuredData[key]);
                     }
                 }
                 
