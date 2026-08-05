@@ -4,10 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [1.7.0] - Unreleased
+## [1.7.5] - Unreleased
+
+### Added
+- **Gemini-Powered Structural Migration** `[feat-Migration]`: Completely rewrote the 1.7.0 structural migration script (`migrate_1_7_0_structure.js`) to intelligently route legacy documents through the backend's native Gemini LLM integration.
+- **Deep Prose Attribute Extraction** `[feat-Migration]`: Upgraded the migration prompt sequence to ingest both legacy root keys and the document's raw plain text body (`doc.content`), allowing the LLM to dynamically deduce and map new attributes directly from unstructured narrative prose.
+
+### Fixed
+- **Mongoose Map Casting Safety** `[fix-Migration]`: Resolved a severe risk in the migration script where converting the Mongoose Map to a POJO threatened to overwrite or wipe existing `attributes` (like `chapter_content`). The script now safely injects new keys using strict Mongoose `doc.set('attributes.key', value)` syntax to perfectly preserve existing data.
+
+---
+
+## [1.7.0] - 2026-08-05
 
 ### Added
 - **Database Migration Utilities** `[feat-Layland]`: Added new migration scripts (`migrate_character_attributes.js`, `fix_content.js`) to transition unstructured character data to discrete attributes, split `rank_clearance`, and purge legacy injected markdown from documents.
+- **Template Auto-Syncing** `[feat-Layland]`: Implemented startup logic in `mongoDB.js` to automatically read `templates.json` and cleanly `upsert` all templates into the MongoDB collections, ensuring the database is always in sync with local UI schema changes.
 
 ### Changed
 - **Element Schema Overhaul** `[feat-Layland]`: Updated default `characterElements.json` to formally declare `Race`, `Rank`, `Clearance`, and `Traits` as dedicated entity structures.
