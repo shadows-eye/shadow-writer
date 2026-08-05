@@ -39,13 +39,21 @@ mongoose.connect(mongoUri)
                     }
                 }
                 
-                // If there are no legacy fields, skip
-                if (Object.keys(legacyFields).length === 0) continue;
+                const hasLegacyFields = Object.keys(legacyFields).length > 0;
+                const hasAttributes = rawObj.attributes && Object.keys(rawObj.attributes).length > 0;
+                
+                // Skip if the document is already structurally sound AND has some attributes mapped
+                if (!hasLegacyFields && hasAttributes) continue;
 
                 const docType = rawObj.type || modelInfo.name.toLowerCase();
                 const systemPrompt = "SYSTEM DIRECTIVE: You are an automatic data structurer. The user has provided an unstructured block of text for this document. Analyze the text and map it directly into a structured JSON schema appropriate for a " + docType + ". Output only valid JSON with the mapped attributes. Do not include markdown formatting or conversational text.";
-                
-                const fullPrompt = `${systemPrompt}\n\nUnstructured Text:\n${JSON.stringify(legacyFields, null, 2)}`;
+                const fullPrompt = `${systemPrompt}
+
+Unstructured Data (Legacy Database Fields):
+${JSON.stringify(legacyFields, null, 2)}
+
+Plain Text Content (Analyze this for attributes):
+${rawObj.content || 'No content provided.'}`;
 
                 console.log(`Sending doc ${rawObj.id || rawObj._id} to Gemini for auto-structuring...`);
                 
