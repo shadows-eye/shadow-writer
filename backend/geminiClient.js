@@ -201,7 +201,7 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
     isVertex = false;
   }
 
-  let modelToUse = model || (isSubagent ? "gemini-3.6-flash" : "gemini-3.5-flash");
+  let modelToUse = model || (isSubagent ? "gemini-3.6-flash" : "gemini-3.6-flash");
   let thinkingToUse = thinkingLevel || (isSubagent ? "low" : "high");
 
   // Pre-flight Token Count & Dynamic Routing
@@ -210,12 +210,12 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
     console.log(`Pre-flight token count: model=${modelToUse}, total_tokens=${totalTokens}`);
 
     if (modelToUse === "gemini-3.6-flash" && totalTokens > 60000) {
-      console.log(`Tokens ${totalTokens} exceed gemini-3.6-flash sweet spot. Upgrading to gemini-3.5-flash.`);
-      modelToUse = "gemini-3.5-flash";
+      console.log(`Tokens ${totalTokens} exceed gemini-3.6-flash sweet spot. Upgrading to gemini-3.6-flash.`);
+      modelToUse = "gemini-3.6-flash";
     }
 
-    if (modelToUse === "gemini-3.5-flash" && totalTokens > 100000) {
-      console.log(`Tokens ${totalTokens} exceed gemini-3.5-flash sweet spot. Upgrading to gemini-3.1-pro-preview.`);
+    if (modelToUse === "gemini-3.6-flash" && totalTokens > 100000) {
+      console.log(`Tokens ${totalTokens} exceed gemini-3.6-flash sweet spot. Upgrading to gemini-3.1-pro-preview.`);
       modelToUse = "gemini-3.1-pro-preview";
     }
   } catch (err) {

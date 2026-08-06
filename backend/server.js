@@ -35,7 +35,8 @@ const {
   Character,
   Note,
   ContextFile,
-  parseCharacterAttributes
+  parseCharacterAttributes,
+  getDynamicAttributeKeys
 } = require('./mongoDB');
 
 const { exec } = require('child_process');
@@ -133,6 +134,16 @@ app.get('/api/project-status', async (req, res) => {
   } catch (error) {
     console.error('Error in /api/project-status:', error);
     res.status(500).json({ error: 'Failed to check project status' });
+  }
+});
+
+app.get('/api/schema', async (req, res) => {
+  try {
+    const schema = await getDynamicAttributeKeys();
+    res.json(schema);
+  } catch (error) {
+    console.error('Error in /api/schema:', error);
+    res.status(500).json({ error: 'Failed to fetch dynamic schema' });
   }
 });
 
@@ -566,7 +577,7 @@ app.get('/api/characters', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     const list = await Character.find({ projectId: pId });
     const formatted = [];
     for (const item of list) {
@@ -576,7 +587,7 @@ app.get('/api/characters', async (req, res) => {
         name: cleaned.name || cleaned.id,
         species: cleaned.species || 'Unknown',
         age: cleaned.age || 'Unknown',
-        attributes: cleaned.attributes || {},
+        attributes: sanitizeAttributesObj(cleaned.attributes) || {},
         content: cleaned.content
       });
     }
@@ -593,7 +604,7 @@ app.get('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     let doc = await Character.findOne({ projectId: pId, id });
     if (!doc) {
       doc = await Character.findOne({ id });
@@ -607,7 +618,7 @@ app.get('/api/characters/:id', async (req, res) => {
       name: cleaned.name || cleaned.id,
       species: cleaned.species || 'Unknown',
       age: cleaned.age || 'Unknown',
-      attributes: cleaned.attributes || {},
+      attributes: sanitizeAttributesObj(cleaned.attributes) || {},
       content: cleaned.content
     });
   } catch (err) {
@@ -639,9 +650,10 @@ app.post('/api/characters/:id', async (req, res) => {
 
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
     const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
-    updatedChar.name = charName || (existingChar ? existingChar.name : id);
-    updatedChar.species = finalCleanAttrs['species'] || 'Unknown';
-    updatedChar.age = finalCleanAttrs['age'] || 'Unknown';
+    const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
+    updatedChar.name = (inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id);
+    updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
+    updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
     await updatedChar.save();
 
@@ -668,15 +680,53 @@ app.get('/api/chapters', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     const list = await Chapter.find({ projectId: pId }).sort({ orderIndex: 1 });
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
+      
+      let reconstructedContent = cleaned.content || '';
+      if (cleaned.scenes) {
+          const scenesObj = cleaned.scenes instanceof Map ? Object.fromEntries(cleaned.scenes) : cleaned.scenes;
+          if (Object.keys(scenesObj).length > 0) {
+              let sceneHtmls = [];
+              let sceneIds = Object.keys(scenesObj);
+              for (let i = 0; i < sceneIds.length; i++) {
+                  const sId = sceneIds[i];
+                  const sceneDataRaw = scenesObj[sId];
+                  const sceneData = sceneDataRaw instanceof Map ? Object.fromEntries(sceneDataRaw) : sceneDataRaw;
+                  const bObjRaw = sceneData.beats || {};
+                  const bObj = bObjRaw instanceof Map ? Object.fromEntries(bObjRaw) : bObjRaw;
+                  
+                  let beatHtmls = [];
+                  let beatIds = Object.keys(bObj);
+                  for (let j = 0; j < beatIds.length; j++) {
+                      const bId = beatIds[j];
+                      const bContent = bObj[bId];
+                      if (j > 0) {
+                          beatHtmls.push(`\n<hr id="${bId}" class="beat-break border-dashed border-gray-600 my-4">\n`);
+                      }
+                      beatHtmls.push(bContent.html || bContent.text || '');
+                  }
+                  sceneHtmls.push(beatHtmls.join(''));
+              }
+
+              reconstructedContent = '';
+              for (let i = 0; i < sceneHtmls.length; i++) {
+                  const sId = sceneIds[i];
+                  if (i > 0) {
+                      reconstructedContent += `\n<hr id="${sId}" class="scene-break border-2 border-cyan-700/50 my-8 w-1/2 mx-auto rounded-full">\n`;
+                  }
+                  reconstructedContent += sceneHtmls[i];
+              }
+          }
+      }
       formatted.push({
         id: cleaned.id,
-        content: cleaned.content,
-        attributes: cleaned.attributes,
+        name: cleaned.name,
+        content: reconstructedContent,
+        attributes: sanitizeAttributesObj(cleaned.attributes),
         pendingDiff: cleaned.pendingDiff || null
       });
     }
@@ -703,8 +753,72 @@ app.post('/api/chapters/:id', async (req, res) => {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
       if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
           delete attributes.unstructured;
+          if (req.body.attributes.name) {
+              updateData.name = req.body.attributes.name;
+          }
       }
-      updateData.content = "";
+      
+      // Parse scenes and beats
+      let scenesData = {};
+      if (cleanContent) {
+          const crypto = require('crypto');
+          const generateId = () => crypto.randomBytes(4).toString('hex');
+          
+          const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
+          
+          let currentSceneId = `scene-${generateId()}`;
+          let currentSceneText = sceneTokens[0] || '';
+
+          const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+
+          const parseBeats = (sceneText) => {
+              const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
+              let beats = {};
+              let currentBeatId = `beat-${generateId()}`;
+              let currentBeatText = beatTokens[0] || '';
+              
+              if (currentBeatText.trim().length > 0) {
+                  beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
+              }
+              
+              for (let i = 1; i < beatTokens.length; i += 2) {
+                  const sep = beatTokens[i];
+                  const nextText = beatTokens[i+1] || '';
+                  const idMatch = sep.match(/id=["']([^"']+)["']/i);
+                  currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
+                  
+                  if (nextText.trim().length > 0) {
+                      beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
+                  }
+              }
+              return beats;
+          };
+
+          if (currentSceneText.trim().length > 0) {
+              const parsedBeats = parseBeats(currentSceneText);
+              if (Object.keys(parsedBeats).length > 0) {
+                  scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+              }
+          }
+
+          for (let i = 1; i < sceneTokens.length; i += 2) {
+              const sep = sceneTokens[i];
+              const nextText = sceneTokens[i+1] || '';
+              
+              const idMatch = sep.match(/id=["']([^"']+)["']/i);
+              currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
+              
+              if (nextText.trim().length > 0) {
+                  const parsedBeats = parseBeats(nextText);
+                  if (Object.keys(parsedBeats).length > 0) {
+                      scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+                  }
+              }
+          }
+      }
+      
+      updateData.scenes = scenesData;
+      updateData.content = ""; // Clear root content
       updateData.attributes = attributes;
     }
     if (clearPendingDiff) {
@@ -730,12 +844,12 @@ app.get('/api/notes', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     const list = await Note.find({ projectId: pId, type: { $ne: 'artifact' } });
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'note');
-      formatted.push({ id: cleaned.id, content: cleaned.content, name: cleaned.name, type: cleaned.type, attributes: cleaned.attributes });
+      formatted.push({ id: cleaned.id, content: cleaned.content, name: cleaned.name, type: cleaned.type, attributes: sanitizeAttributesObj(cleaned.attributes) });
     }
     res.json({ notes: formatted });
   } catch (err) {
@@ -750,15 +864,14 @@ app.get('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     let note = await Note.findOne({ projectId: pId, id });
     if (!note && (id === 'dossier' || id === 'story_dossier')) {
       note = await Note.findOne({ projectId: pId, id: { $in: ['final_dossier', 'story_dossier', 'dossier'] } });
     }
     if (!note) return res.status(404).json({ error: 'Note not found' });
-
     const cleaned = await ensureCleanDocumentOnRead(note, 'note');
-    res.json({ id: cleaned.id, name: cleaned.name, content: cleaned.content, type: cleaned.type, attributes: cleaned.attributes });
+    res.json({ id: cleaned.id, name: cleaned.name, content: cleaned.content, type: cleaned.type, attributes: sanitizeAttributesObj(cleaned.attributes) });
   } catch (err) {
     console.error('Error fetching single note:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -804,7 +917,8 @@ app.post('/api/notes/:id', async (req, res) => {
       }
     }
     
-    note.name = normName || note.name || id;
+    const reqAttributesName = reqAttributes && reqAttributes.name;
+    note.name = reqAttributesName || normName || note.name || id;
     note.type = targetType;
     note.content = "";
     note.markModified('attributes');
