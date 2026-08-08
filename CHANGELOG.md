@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.1] - 2026-08-08
+
+### Fixed
+- **AI Prompt Strict Schema Directives**: Updated system prompts in `prompt.js` to mandate strict adherence to existing database JSON schemas, preventing model outputs from inventing unmapped keys or returning raw markdown code fence wrappers (` ```markdown `).
+
+---
+
+## [1.8.0] - 2026-08-07
+
+### Changed
+- **MongoDB Document Schema Updates**: Updated MongoDB document schemas and backend endpoints for 1.8.0 chapter structures and stripped legacy unstructured attributes.
+
 ---
 
 ## [1.7.6] - Unreleased
