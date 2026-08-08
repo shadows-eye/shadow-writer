@@ -7,3 +7,6 @@ backend/novels/
 
 # Ignore MongoDB database files completely
 backend/db/
+
+#Ignore scratch folder
+scratch/

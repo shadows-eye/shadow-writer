@@ -94,7 +94,9 @@ const History = mongoose.model('History', HistorySchema);
 const ChapterSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true }, // e.g. "chapter-1"
-  content: String,
+  name: String,
+  content: String, // Kept as fallback/raw for now
+  scenes: { type: Map, of: mongoose.Schema.Types.Mixed },
   attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic stats/sliders
   orderIndex: Number,
   lastEdited: { type: Date, default: Date.now }
@@ -138,6 +140,19 @@ const ArtifactSchema = new mongoose.Schema({
 });
 ArtifactSchema.index({ projectId: 1, id: 1 }, { unique: true });
 const Artifact = mongoose.model('Artifact', ArtifactSchema);
+
+let dynamicSchemaCache = null;
+const invalidateSchemaCache = () => { dynamicSchemaCache = null; };
+
+ChapterSchema.post('save', invalidateSchemaCache);
+ChapterSchema.post('findOneAndUpdate', invalidateSchemaCache);
+CharacterSchema.post('save', invalidateSchemaCache);
+CharacterSchema.post('findOneAndUpdate', invalidateSchemaCache);
+NoteSchema.post('save', invalidateSchemaCache);
+NoteSchema.post('findOneAndUpdate', invalidateSchemaCache);
+ArtifactSchema.post('save', invalidateSchemaCache);
+ArtifactSchema.post('findOneAndUpdate', invalidateSchemaCache);
+
 
 const ContextFileSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
@@ -848,6 +863,55 @@ async function cleanDatabaseOnStartup() {
   }
 }
 
+async function getDynamicAttributeKeys() {
+  if (dynamicSchemaCache) return dynamicSchemaCache;
+
+  const schema = {
+    _rules: "To create a new attribute, you MUST use the object format: 'attribute_name': { 'text': 'plain text value', 'html': 'html formatted value' }. Do not use plain strings for custom attributes.",
+    characters: {},
+    notes: {},
+    chapters: {}
+  };
+
+  const getKeysForModel = async (Model, schemaTarget) => {
+    try {
+      const docs = await Model.find({}, 'attributes').lean();
+      for (const doc of docs) {
+        if (!doc.attributes) continue;
+        const attrs = doc.attributes;
+        const type = attrs.type || 'unknown';
+        const subtype = attrs.subtypeTag || type;
+        
+        if (!schemaTarget[subtype]) {
+          schemaTarget[subtype] = new Set();
+        }
+        
+        for (const key of Object.keys(attrs)) {
+          if (key !== 'type' && key !== 'subtypeTag' && key !== 'unstructured') {
+            schemaTarget[subtype].add(key);
+          }
+        }
+      }
+      
+      // Convert sets to arrays
+      for (const subtype of Object.keys(schemaTarget)) {
+        schemaTarget[subtype] = Array.from(schemaTarget[subtype]);
+      }
+    } catch (e) {
+      console.error('Error fetching dynamic keys for model:', e);
+    }
+  };
+
+  await Promise.all([
+    getKeysForModel(Character, schema.characters),
+    getKeysForModel(Note, schema.notes),
+    getKeysForModel(Chapter, schema.chapters)
+  ]);
+
+  dynamicSchemaCache = schema;
+  return schema;
+}
+
 module.exports = {
   readDB,
   writeDB,
@@ -861,6 +925,7 @@ module.exports = {
   updateDocumentAttributeKeys,
   ensureCleanDocumentOnRead,
   cleanDatabaseOnStartup,
+  getDynamicAttributeKeys,
   findProject,
   Project,
   Template,
