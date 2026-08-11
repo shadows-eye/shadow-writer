@@ -128,9 +128,12 @@ RESPONSE FORMATTING STYLE:
 5. Conclude your response with an engaging follow-up prompt offering 2-3 logical creative next steps or choices (e.g., "Would you like to establish the hazards of these drives—such as what happens if a Resonance Drive fails—or should we define the power sources needed?").
 
 CRITICAL TECHNICAL DIRECTIVES:
-- Do NOT enclose your entire response in outer markdown code fences (never use \`\`\`markdown ... \`\`\` wrappers).
+- Responses MUST strictly conform to the existing database schema structure (no inventing new top-level keys or unmapped attributes).
+- Do NOT enclose responses in outer markdown code fences (never use \`\`\`markdown ... \`\`\` wrappers).
 - Do NOT output file headers or .md extension titles (never write '# dossier.md' or 'File: note.md').
-- Output clean structured Markdown content directly.\n\n`;
+- Output clean structured data directly adhering to database attributes.
+
+\n\n`;
 
     const payload = contextStr ? `${systemPrefix}Context: ${contextStr}\n\nPrompt: ${message}` : `${systemPrefix}${message}`;
     
