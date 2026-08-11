@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.2] - 2026-08-11
+
+### Added
+- **POST /api/history Endpoint**: Implemented `POST /api/history` in `backend/server.js` to record AI Chat rewrites, formatting runs, and automation executions into the MongoDB History database in real-time.
+
+### Fixed
+- **Full History Details Formatting**: Updated `GET /api/history` in `backend/server.js` to return `id`, `userPrompt`, `aiResponse`, `pipelineType`, `status`, and `logs` for full execution log inspection.
+
+---
+
 ## [1.8.1] - 2026-08-08
 
 ### Fixed

@@ -529,16 +529,57 @@ app.get('/api/history', async (req, res) => {
 
   try {
     const list = await History.find({ projectId: project.id }).sort({ timestamp: -1 }).lean();
-    const formatted = list.map(item => ({
-      hash: item._id.toString(),
-      date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
-      message: item.log || `${item.type || 'Agent'} run`,
-      author_name: item.userId || 'AI Agent'
-    }));
+    const formatted = list.map(item => {
+      const payload = item.payload || {};
+      return {
+        id: item._id.toString(),
+        hash: item._id.toString(),
+        jobId: item.jobId || item._id.toString(),
+        date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
+        message: payload.message || `${item.type || 'AI Agent'} run`,
+        pipelineType: item.type || 'ai_chat',
+        status: item.status || 'completed',
+        author_name: item.userId || 'AI Agent',
+        userPrompt: payload.userPrompt || payload.prompt || '',
+        aiResponse: payload.aiResponse || payload.response || payload.newDocText || '',
+        logs: item.logs || []
+      };
+    });
     res.json({ history: formatted });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to read history from DB' });
+  }
+});
+
+app.post('/api/history', async (req, res) => {
+  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
+
+  const projects = await Project.find({}).lean();
+  const project = findProject(projects, projectId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  try {
+    const jobId = `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const historyItem = await History.create({
+      jobId,
+      projectId: project.id,
+      userId: author_name || 'AI Agent',
+      type: pipelineType || type || 'ai_chat',
+      status: status || 'completed',
+      logs: logs || [`[INFO] Executed ${pipelineType || 'AI Agent'} run`],
+      payload: {
+        message: message || 'AI Chat Run',
+        userPrompt: userPrompt || '',
+        aiResponse: aiResponse || ''
+      },
+      timestamp: new Date()
+    });
+    res.json({ success: true, history: historyItem });
+  } catch (err) {
+    console.error('Error creating history run:', err);
+    res.status(500).json({ error: 'Failed to save history entry' });
   }
 });
 
