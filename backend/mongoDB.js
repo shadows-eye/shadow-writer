@@ -94,6 +94,24 @@ const HistorySchema = new mongoose.Schema({
 }, { strict: false });
 const History = mongoose.model('History', HistorySchema);
 
+const JobSchema = new mongoose.Schema({
+  jobId: { type: String, required: true, unique: true, index: true },
+  projectId: { type: String, required: true, index: true },
+  pipelineType: String,
+  status: { type: String, default: 'running' },
+  progress: { type: Number, default: 0.0 },
+  activeSubagentIndex: { type: Number, default: 0 },
+  activeTaskIndex: { type: Number, default: 0 },
+  taskSequence: mongoose.Schema.Types.Mixed,
+  thinking: String,
+  logs: [String],
+  modifiedDocs: mongoose.Schema.Types.Mixed,
+  diffHtml: String,
+  payload: mongoose.Schema.Types.Mixed,
+  lastUpdated: { type: Date, default: Date.now }
+}, { strict: false });
+const Job = mongoose.model('Job', JobSchema);
+
 const ChapterSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true }, // e.g. "chapter-1"
@@ -1029,6 +1047,7 @@ module.exports = {
   Template,
   CharacterElement,
   History,
+  Job,
   Chapter,
   Character,
   Note,

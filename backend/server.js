@@ -32,6 +32,7 @@ const {
   Template,
   CharacterElement,
   History,
+  Job,
   Chapter,
   Character,
   Note,
@@ -608,6 +609,84 @@ app.post('/api/history', async (req, res) => {
   } catch (err) {
     console.error('Error creating history run:', err);
     res.status(500).json({ error: 'Failed to save history entry' });
+  }
+});
+
+// --- JOBS API (Active Pipeline Job Storage) ---
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    let query = {};
+    if (projectId && projectId !== 'all' && projectId !== 'global') {
+      query = { projectId };
+    }
+    const jobsList = await Job.find(query).sort({ updatedAt: -1 }).lean();
+    res.json({ jobs: jobsList });
+  } catch (err) {
+    console.error('Error listing jobs from DB:', err);
+    res.status(500).json({ error: 'Failed to list jobs from DB' });
+  }
+});
+
+app.get('/api/jobs/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = await Job.findOne({ jobId }).lean();
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    res.json({ job });
+  } catch (err) {
+    console.error('Error fetching job from DB:', err);
+    res.status(500).json({ error: 'Failed to read job from DB' });
+  }
+});
+
+app.post('/api/jobs', async (req, res) => {
+  const data = req.body || {};
+  const jobId = data.jobId || data.id;
+  if (!jobId) {
+    return res.status(400).json({ error: 'jobId is required' });
+  }
+
+  try {
+    const fieldsToSet = {
+      jobId,
+      projectId: data.projectId || 'global',
+      pipelineType: data.pipelineType || 'braindump_to_dossier',
+      status: data.status || 'running',
+      progress: data.progress !== undefined ? data.progress : 0.0,
+      activeSubagentIndex: data.activeSubagentIndex || 0,
+      activeTaskIndex: data.activeTaskIndex || 0,
+      taskSequence: data.taskSequence || [],
+      thinking: data.thinking || '',
+      logs: data.logs || [],
+      modifiedDocs: data.modifiedDocs || [],
+      diffHtml: data.diffHtml || '',
+      payload: data.payload || {},
+      lastUpdated: new Date()
+    };
+
+    const updatedJob = await Job.findOneAndUpdate(
+      { jobId },
+      { $set: fieldsToSet },
+      { upsert: true, new: true, lean: true }
+    );
+    res.json({ success: true, job: updatedJob });
+  } catch (err) {
+    console.error('Error upserting job:', err);
+    res.status(500).json({ error: 'Failed to save job entry' });
+  }
+});
+
+app.delete('/api/jobs/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    await Job.deleteOne({ jobId });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting job:', err);
+    res.status(500).json({ error: 'Failed to delete job entry' });
   }
 });
 
