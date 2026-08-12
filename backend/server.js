@@ -543,8 +543,9 @@ app.get('/api/history', async (req, res) => {
         hash: item._id.toString(),
         jobId: item.jobId || item._id.toString(),
         date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
-        message: payload.message || `${item.type || 'AI Agent'} run`,
-        pipelineType: item.type || 'ai_chat',
+        message: payload.message || `${item.pipelineType || item.type || 'AI Agent'} run`,
+        pipelineType: item.pipelineType || item.type || 'ai_chat',
+        type: item.type || item.pipelineType || 'ai_chat',
         status: item.status || 'running',
         progress: item.progress !== undefined ? item.progress : 0.0,
         activeSubagentIndex: item.activeSubagentIndex || 0,
@@ -572,6 +573,7 @@ app.post('/api/history', async (req, res) => {
   const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs, payload, jobId, job_id, progress, activeSubagentIndex, activeTaskIndex, taskSequence, thinking, modifiedDocs, diffHtml, docId } = req.body || {};
   const targetProjectId = projectId || 'global';
   const finalJobId = jobId || job_id || `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  const resolvedType = pipelineType || type || 'ai_chat';
 
   try {
     const existingHistory = await History.findOne({ jobId: finalJobId });
@@ -579,7 +581,8 @@ app.post('/api/history', async (req, res) => {
       jobId: finalJobId,
       projectId: targetProjectId,
       userId: author_name || 'AI Agent',
-      type: pipelineType || type || 'ai_chat',
+      type: resolvedType,
+      pipelineType: resolvedType,
       status: status || 'completed',
       progress: progress !== undefined ? progress : 1.0,
       activeSubagentIndex: activeSubagentIndex || 0,
@@ -959,8 +962,8 @@ app.get('/api/notes/:id', async (req, res) => {
 
 app.post('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId, attributes: reqAttributes } = req.body;
-  if (!content && !reqAttributes) return res.status(400).json({ error: 'Missing content or attributes' });
+  const { name, content, projectId, attributes: reqAttributes } = req.body;
+  if (!content && !reqAttributes && !name) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
@@ -1020,8 +1023,8 @@ app.post('/api/notes/:id', async (req, res) => {
       }
     }
 
-    const reqAttributesName = reqAttributes && reqAttributes.name;
-    note.name = extractString(reqAttributesName) || extractString(normName) || note.name || id;
+    const reqName = name || (reqAttributes && reqAttributes.name);
+    note.name = extractString(reqName) || extractString(normName) || note.name || id;
     note.type = targetType;
     note.content = "";
     note.markModified('attributes');
