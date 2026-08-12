@@ -520,15 +520,21 @@ app.post('/api/templates/:id/chat', async (req, res) => {
 
 // --- HISTORY API ---
 app.get('/api/history', async (req, res) => {
-  const { projectId } = req.query;
-  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
-
-  const projects = await Project.find({}).lean();
-  const project = findProject(projects, projectId);
-  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const { projectId, runId, jobId } = req.query;
 
   try {
-    const list = await History.find({ projectId: project.id }).sort({ timestamp: -1 }).lean();
+    let query = {};
+    if (runId || jobId) {
+      const targetId = runId || jobId;
+      query = { $or: [{ _id: mongoose.Types.ObjectId.isValid(targetId) ? new mongoose.Types.ObjectId(targetId) : null }, { jobId: targetId }, { 'payload.jobId': targetId }] };
+    } else if (projectId && projectId !== 'all' && projectId !== 'global') {
+      const projects = await Project.find({}).lean();
+      const project = findProject(projects, projectId);
+      const targetProjectId = project ? project.id : projectId;
+      query = { $or: [{ projectId: targetProjectId }, { projectId: 'global' }, { projectId: projectId }] };
+    }
+
+    const list = await History.find(query).sort({ timestamp: -1 }).limit(100).lean();
     const formatted = list.map(item => {
       const payload = item.payload || {};
       return {
@@ -542,40 +548,39 @@ app.get('/api/history', async (req, res) => {
         author_name: item.userId || 'AI Agent',
         userPrompt: payload.userPrompt || payload.prompt || '',
         aiResponse: payload.aiResponse || payload.response || payload.newDocText || '',
-        logs: item.logs || []
+        logs: item.logs || [],
+        payload: payload
       };
     });
-    res.json({ history: formatted });
+    res.json({ history: formatted, runs: formatted });
   } catch (err) {
-    console.error(err);
+    console.error('Error fetching history:', err);
     res.status(500).json({ error: 'Failed to read history from DB' });
   }
 });
 
 app.post('/api/history', async (req, res) => {
-  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs } = req.body || {};
-  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
-
-  const projects = await Project.find({}).lean();
-  const project = findProject(projects, projectId);
-  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs, payload, jobId, job_id } = req.body || {};
+  const targetProjectId = projectId || 'global';
 
   try {
-    const jobId = `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const finalJobId = jobId || job_id || `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const finalPayload = payload || {
+      message: message || 'AI Chat Run',
+      userPrompt: userPrompt || '',
+      aiResponse: aiResponse || ''
+    };
     const historyItem = await History.create({
-      jobId,
-      projectId: project.id,
+      jobId: finalJobId,
+      projectId: targetProjectId,
       userId: author_name || 'AI Agent',
       type: pipelineType || type || 'ai_chat',
       status: status || 'completed',
       logs: logs || [`[INFO] Executed ${pipelineType || 'AI Agent'} run`],
-      payload: {
-        message: message || 'AI Chat Run',
-        userPrompt: userPrompt || '',
-        aiResponse: aiResponse || ''
-      },
+      payload: finalPayload,
       timestamp: new Date()
     });
+    console.log(`[DEBUG MONGODB HISTORY] Saved run history entry: jobId=${finalJobId}, projectId=${targetProjectId}`);
     res.json({ success: true, history: historyItem });
   } catch (err) {
     console.error('Error creating history run:', err);
@@ -601,11 +606,16 @@ app.post('/api/character-elements', async (req, res) => {
   }
 
   try {
-    const existing = await CharacterElement.findOne({ id: newElement.id });
-    if (existing) {
-      return res.status(400).json({ error: 'Character element key already defined' });
+    let element = await CharacterElement.findOne({ id: newElement.id });
+    if (element) {
+      element.name = newElement.name || element.name;
+      element.type = newElement.type || element.type;
+      element.color = newElement.color !== undefined ? newElement.color : element.color;
+      element.isTag = newElement.isTag !== undefined ? newElement.isTag : element.isTag;
+      await element.save();
+    } else {
+      element = await CharacterElement.create(newElement);
     }
-    const element = await CharacterElement.create(newElement);
     res.json({ success: true, element });
   } catch (e) {
     console.error('Error saving character element:', e);
@@ -675,7 +685,7 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys, extractString } = require('./mongoDB');
     const existingChar = await Character.findOne({ projectId: pId, id });
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
@@ -692,7 +702,7 @@ app.post('/api/characters/:id', async (req, res) => {
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
     const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
     const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
-    updatedChar.name = (inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id);
+    updatedChar.name = extractString((inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id));
     updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
     updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
@@ -787,15 +797,23 @@ app.post('/api/chapters/:id', async (req, res) => {
   try {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
-    const { sanitizeAndStructureContent } = require('./mongoDB');
+    const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
     
     const updateData = { orderIndex, lastEdited: new Date() };
+
+    if (req.body.name || (req.body.attributes && req.body.attributes.name)) {
+      updateData.name = extractString(req.body.name || req.body.attributes.name);
+    }
+
     if (content) {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
       if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
           delete attributes.unstructured;
+          const cleanedReqAttrs = { ...req.body.attributes };
+          delete cleanedReqAttrs.name;
+          Object.assign(attributes, cleanedReqAttrs);
           if (req.body.attributes.name) {
-              updateData.name = req.body.attributes.name;
+              updateData.name = extractString(req.body.attributes.name);
           }
       }
       
@@ -926,7 +944,7 @@ app.post('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, extractString } = require('./mongoDB');
     const existingNote = await Note.findOne({ projectId: pId, id });
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
@@ -958,8 +976,32 @@ app.post('/api/notes/:id', async (req, res) => {
       }
     }
     
+    // Enforce unique subtypeTag for 'dossier' and 'outline' per project
+    if (targetType === 'dossier' || targetType === 'outline') {
+      try {
+        const conflictingNotes = await Note.find({ projectId: pId, id: { $ne: normId } });
+        for (const confNote of conflictingNotes) {
+          const confTag = confNote.attributes && confNote.attributes.get ? confNote.attributes.get('subtypeTag') : (confNote.attributes || {}).subtypeTag;
+          if (confTag === targetType) {
+            if (confNote.attributes && typeof confNote.attributes.set === 'function') {
+              confNote.attributes.set('subtypeTag', 'notes');
+              confNote.attributes.set('type', 'notes');
+            } else if (confNote.attributes) {
+              confNote.attributes.subtypeTag = 'notes';
+              confNote.attributes.type = 'notes';
+            }
+            confNote.type = 'notes';
+            confNote.markModified('attributes');
+            await confNote.save();
+          }
+        }
+      } catch (errConf) {
+        console.error('Error unsetting duplicate unique subtypeTag:', errConf);
+      }
+    }
+
     const reqAttributesName = reqAttributes && reqAttributes.name;
-    note.name = reqAttributesName || normName || note.name || id;
+    note.name = extractString(reqAttributesName) || extractString(normName) || note.name || id;
     note.type = targetType;
     note.content = "";
     note.markModified('attributes');

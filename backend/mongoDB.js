@@ -10,6 +10,7 @@ mongoose.connect(mongoUri)
     console.log('Connected to MongoDB');
     seedDatabaseIfEmpty()
       .then(() => migrateExistingCharacters().catch(err => console.error('Migration error:', err)))
+      .then(() => migrateExistingCharacterElements().catch(err => console.error('Element migration error:', err)))
       .then(() => cleanDatabaseOnStartup().catch(err => console.error('Startup cleanup error:', err)))
       .catch(err => console.error('Error seeding database:', err));
   })
@@ -62,6 +63,8 @@ const CharacterElementSchema = new mongoose.Schema({
   type: String,
   entityType: { type: String, default: 'characters' },
   isDefault: { type: Boolean, default: false },
+  color: { type: String, default: '' },
+  isTag: { type: Boolean, default: true },
   prefix: String,
   suffix: String,
   details: String,
@@ -72,7 +75,7 @@ const CharacterElementSchema = new mongoose.Schema({
 const CharacterElement = mongoose.model('CharacterElement', CharacterElementSchema);
 
 const HistorySchema = new mongoose.Schema({
-  jobId: { type: String, unique: true, required: true },
+  jobId: { type: String, index: true },
   userId: String,
   projectId: String,
   type: String,
@@ -88,7 +91,7 @@ const HistorySchema = new mongoose.Schema({
   }],
   payload: mongoose.Schema.Types.Mixed,
   timestamp: { type: Date, default: Date.now }
-});
+}, { strict: false });
 const History = mongoose.model('History', HistorySchema);
 
 const ChapterSchema = new mongoose.Schema({
@@ -217,6 +220,17 @@ function findProject(projects, projectId) {
   return p;
 }
 
+function extractString(val) {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object') {
+    if (val.text !== undefined && val.text !== null) return String(val.text);
+    if (val.html !== undefined && val.html !== null) return String(val.html);
+    return '';
+  }
+  return String(val);
+}
+
 function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   let content = rawContent || '';
   const attributes = {};
@@ -318,7 +332,8 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   content = content.replace(/\\(\$\{)/g, '$1');
 
   // 8. Determine clean name and title
-  let name = attributes.name || id || 'Untitled Note';
+  let name = extractString(attributes.name) || id || 'Untitled Note';
+  if (attributes.name) delete attributes.name;
 
   // 9. Standardize output type & ID mapping
   let normalizedId = id;
@@ -772,6 +787,37 @@ async function migrateExistingCharacters() {
   }
 }
 
+async function migrateExistingCharacterElements() {
+  console.log('[Migration] Checking existing character element definitions...');
+  try {
+    const elements = await CharacterElement.find({});
+    let count = 0;
+    for (const el of elements) {
+      let needsSave = false;
+      if (el.isTag === undefined || el.isTag === null) {
+        el.isTag = !(el.type === 'textarea' || el.id === 'description' || el.id === 'unstructured');
+        needsSave = true;
+      }
+      if (!el.color) {
+        const k = (el.id || '').toLowerCase();
+        if (k === 'race' || k === 'species') el.color = 'bg-blue-900/80 text-blue-300 border-blue-700/80';
+        else if (k === 'role' || k === 'rank') el.color = 'bg-amber-900/80 text-amber-300 border-amber-700/80';
+        else if (k === 'traits' || k === 'personality') el.color = 'bg-emerald-900/80 text-emerald-300 border-emerald-700/80';
+        else if (k === 'age' || k === 'level') el.color = 'bg-cyan-900/80 text-cyan-300 border-cyan-700/80';
+        else if (k === 'status') el.color = 'bg-teal-900/80 text-teal-300 border-teal-700/80';
+        needsSave = true;
+      }
+      if (needsSave) {
+        await el.save();
+        count++;
+      }
+    }
+    console.log(`✓ Character element migration complete. Updated ${count} element definitions.`);
+  } catch (error) {
+    console.error('Failed to migrate character element definitions:', error);
+  }
+}
+
 async function ensureCleanDocumentOnRead(doc, type = 'note') {
   if (!doc || !doc.content) return doc;
 
@@ -837,23 +883,67 @@ async function cleanDatabaseOnStartup() {
   try {
     const chapters = await Chapter.find({});
     for (const doc of chapters) {
-      if (!doc.content) continue;
+      let existingAttrs = {};
+      if (doc.attributes) {
+        if (doc.attributes instanceof Map) {
+          existingAttrs = Object.fromEntries(doc.attributes);
+        } else if (typeof doc.attributes === 'object') {
+          existingAttrs = { ...doc.attributes };
+        }
+      }
+      
       const raw = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
       const { attributes, cleanContent } = sanitizeAndStructureContent(raw, 'chapter', doc.id);
       
+      let needsSave = false;
+      if (existingAttrs.subtypeTag !== 'chapters' && existingAttrs.subtypeTag !== 'chapter') {
+        existingAttrs.subtypeTag = 'chapters';
+        existingAttrs.type = 'chapters';
+        needsSave = true;
+      }
       if (cleanContent !== raw) {
-        let existingAttrs = {};
-        if (doc.attributes) {
-          if (doc.attributes instanceof Map) {
-            existingAttrs = Object.fromEntries(doc.attributes);
-          } else if (typeof doc.attributes === 'object') {
-            existingAttrs = { ...doc.attributes };
-          }
-        }
         doc.content = cleanContent;
+        needsSave = true;
+      }
+      if (needsSave) {
         doc.attributes = { ...existingAttrs, ...attributes };
         await doc.save();
         cleanedCount++;
+      }
+    }
+
+    // Also check Note collection for any notes that represent chapters
+    const notes = await Note.find({});
+    for (const doc of notes) {
+      let existingAttrs = {};
+      if (doc.attributes) {
+        if (doc.attributes instanceof Map) {
+          existingAttrs = Object.fromEntries(doc.attributes);
+        } else if (typeof doc.attributes === 'object') {
+          existingAttrs = { ...doc.attributes };
+        }
+      }
+      const isChap = doc.type === 'chapter' || doc.id.startsWith('chapter') || (doc.name && doc.name.toLowerCase().startsWith('chapter'));
+      if (isChap && existingAttrs.subtypeTag !== 'chapters' && existingAttrs.subtypeTag !== 'chapter') {
+        doc.attributes = { ...existingAttrs, subtypeTag: 'chapters', type: 'chapters' };
+        await doc.save();
+        cleanedCount++;
+      }
+    }
+
+    // Clean Character collection for redundant name/id attribute keys
+    const characters = await Character.find({});
+    for (const doc of characters) {
+      if (doc.attributes) {
+        let existingAttrs = doc.attributes instanceof Map ? Object.fromEntries(doc.attributes) : { ...doc.attributes };
+        let modified = false;
+        if (existingAttrs.name) { delete existingAttrs.name; modified = true; }
+        if (existingAttrs.id) { delete existingAttrs.id; modified = true; }
+        if (modified) {
+          doc.attributes = existingAttrs;
+          await doc.save();
+          cleanedCount++;
+        }
       }
     }
 
@@ -922,6 +1012,7 @@ module.exports = {
   extractAttributesAndContent,
   sanitizeAndStructureContent,
   sanitizeAttributesObj,
+  extractString,
   updateDocumentAttributeKeys,
   ensureCleanDocumentOnRead,
   cleanDatabaseOnStartup,
