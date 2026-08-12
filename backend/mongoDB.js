@@ -819,7 +819,14 @@ async function migrateExistingCharacterElements() {
 }
 
 async function ensureCleanDocumentOnRead(doc, type = 'note') {
-  if (!doc || !doc.content) return doc;
+  if (!doc) return doc;
+  
+  const unstruct = doc.attributes && typeof doc.attributes.get === 'function' ? doc.attributes.get('unstructured') : (doc.attributes || {}).unstructured;
+  if ((!doc.content || String(doc.content).trim() === '') && unstruct) {
+    doc.content = unstruct;
+  }
+
+  if (!doc.content) return doc;
 
   const rawContent = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
   

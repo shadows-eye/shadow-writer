@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const mongoose = require('mongoose');
 
 const app = express();
 
@@ -95,7 +96,7 @@ app.get('/api/project-status', async (req, res) => {
     const hasDossier = !!dossierNote || !!dossierFile;
 
     const hasCharacters = await Character.exists({ projectId: project.id });
-    
+
     const outlineNote = await Note.findOne({
       projectId: project.id,
       $or: [
@@ -120,8 +121,8 @@ app.get('/api/project-status', async (req, res) => {
     } else {
       const chaps = await Chapter.find({ projectId: project.id });
       chapters = chaps.map(c => {
-         const num = parseInt(c.id.replace(/\D/g, ''));
-         return isNaN(num) ? c.id : num;
+        const num = parseInt(c.id.replace(/\D/g, ''));
+        return isNaN(num) ? c.id : num;
       }).sort((a, b) => a - b);
     }
 
@@ -544,11 +545,19 @@ app.get('/api/history', async (req, res) => {
         date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
         message: payload.message || `${item.type || 'AI Agent'} run`,
         pipelineType: item.type || 'ai_chat',
-        status: item.status || 'completed',
+        status: item.status || 'running',
+        progress: item.progress !== undefined ? item.progress : 0.0,
+        activeSubagentIndex: item.activeSubagentIndex || 0,
+        activeTaskIndex: item.activeTaskIndex || 0,
+        taskSequence: item.taskSequence || [],
+        thinking: item.thinking || '',
         author_name: item.userId || 'AI Agent',
         userPrompt: payload.userPrompt || payload.prompt || '',
         aiResponse: payload.aiResponse || payload.response || payload.newDocText || '',
         logs: item.logs || [],
+        modifiedDocs: item.modifiedDocs || [],
+        docId: item.docId || '',
+        diffHtml: item.diffHtml || '',
         payload: payload
       };
     });
@@ -560,27 +569,38 @@ app.get('/api/history', async (req, res) => {
 });
 
 app.post('/api/history', async (req, res) => {
-  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs, payload, jobId, job_id } = req.body || {};
+  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs, payload, jobId, job_id, progress, activeSubagentIndex, activeTaskIndex, taskSequence, thinking, modifiedDocs, diffHtml, docId } = req.body || {};
   const targetProjectId = projectId || 'global';
+  const finalJobId = jobId || job_id || `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
   try {
-    const finalJobId = jobId || job_id || `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const finalPayload = payload || {
-      message: message || 'AI Chat Run',
-      userPrompt: userPrompt || '',
-      aiResponse: aiResponse || ''
-    };
-    const historyItem = await History.create({
+    const existingHistory = await History.findOne({ jobId: finalJobId });
+    const fieldsToSet = {
       jobId: finalJobId,
       projectId: targetProjectId,
       userId: author_name || 'AI Agent',
       type: pipelineType || type || 'ai_chat',
       status: status || 'completed',
+      progress: progress !== undefined ? progress : 1.0,
+      activeSubagentIndex: activeSubagentIndex || 0,
+      activeTaskIndex: activeTaskIndex || 0,
+      taskSequence: taskSequence || [],
+      thinking: thinking || '',
       logs: logs || [`[INFO] Executed ${pipelineType || 'AI Agent'} run`],
-      payload: finalPayload,
+      modifiedDocs: modifiedDocs || [],
+      diffHtml: diffHtml || '',
+      docId: docId || '',
+      payload: payload || { message: message || 'AI Run', userPrompt: userPrompt || '', aiResponse: aiResponse || '' },
       timestamp: new Date()
-    });
-    console.log(`[DEBUG MONGODB HISTORY] Saved run history entry: jobId=${finalJobId}, projectId=${targetProjectId}`);
+    };
+
+    if (existingHistory) {
+      Object.assign(existingHistory, fieldsToSet);
+      await existingHistory.save();
+      return res.json({ success: true, history: existingHistory });
+    }
+
+    const historyItem = await History.create(fieldsToSet);
     res.json({ success: true, history: historyItem });
   } catch (err) {
     console.error('Error creating history run:', err);
@@ -691,7 +711,7 @@ app.post('/api/characters/:id', async (req, res) => {
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
     if (inputAttrs && Object.keys(inputAttrs).length > 0) {
-        delete parsedAttrs.unstructured;
+      delete parsedAttrs.unstructured;
     }
     const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
 
@@ -736,42 +756,42 @@ app.get('/api/chapters', async (req, res) => {
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
-      
+
       let reconstructedContent = cleaned.content || '';
       if (cleaned.scenes) {
-          const scenesObj = cleaned.scenes instanceof Map ? Object.fromEntries(cleaned.scenes) : cleaned.scenes;
-          if (Object.keys(scenesObj).length > 0) {
-              let sceneHtmls = [];
-              let sceneIds = Object.keys(scenesObj);
-              for (let i = 0; i < sceneIds.length; i++) {
-                  const sId = sceneIds[i];
-                  const sceneDataRaw = scenesObj[sId];
-                  const sceneData = sceneDataRaw instanceof Map ? Object.fromEntries(sceneDataRaw) : sceneDataRaw;
-                  const bObjRaw = sceneData.beats || {};
-                  const bObj = bObjRaw instanceof Map ? Object.fromEntries(bObjRaw) : bObjRaw;
-                  
-                  let beatHtmls = [];
-                  let beatIds = Object.keys(bObj);
-                  for (let j = 0; j < beatIds.length; j++) {
-                      const bId = beatIds[j];
-                      const bContent = bObj[bId];
-                      if (j > 0) {
-                          beatHtmls.push(`\n<hr id="${bId}" class="beat-break border-dashed border-gray-600 my-4">\n`);
-                      }
-                      beatHtmls.push(bContent.html || bContent.text || '');
-                  }
-                  sceneHtmls.push(beatHtmls.join(''));
-              }
+        const scenesObj = cleaned.scenes instanceof Map ? Object.fromEntries(cleaned.scenes) : cleaned.scenes;
+        if (Object.keys(scenesObj).length > 0) {
+          let sceneHtmls = [];
+          let sceneIds = Object.keys(scenesObj);
+          for (let i = 0; i < sceneIds.length; i++) {
+            const sId = sceneIds[i];
+            const sceneDataRaw = scenesObj[sId];
+            const sceneData = sceneDataRaw instanceof Map ? Object.fromEntries(sceneDataRaw) : sceneDataRaw;
+            const bObjRaw = sceneData.beats || {};
+            const bObj = bObjRaw instanceof Map ? Object.fromEntries(bObjRaw) : bObjRaw;
 
-              reconstructedContent = '';
-              for (let i = 0; i < sceneHtmls.length; i++) {
-                  const sId = sceneIds[i];
-                  if (i > 0) {
-                      reconstructedContent += `\n<hr id="${sId}" class="scene-break border-2 border-cyan-700/50 my-8 w-1/2 mx-auto rounded-full">\n`;
-                  }
-                  reconstructedContent += sceneHtmls[i];
+            let beatHtmls = [];
+            let beatIds = Object.keys(bObj);
+            for (let j = 0; j < beatIds.length; j++) {
+              const bId = beatIds[j];
+              const bContent = bObj[bId];
+              if (j > 0) {
+                beatHtmls.push(`\n<hr id="${bId}" class="beat-break border-dashed border-gray-600 my-4">\n`);
               }
+              beatHtmls.push(bContent.html || bContent.text || '');
+            }
+            sceneHtmls.push(beatHtmls.join(''));
           }
+
+          reconstructedContent = '';
+          for (let i = 0; i < sceneHtmls.length; i++) {
+            const sId = sceneIds[i];
+            if (i > 0) {
+              reconstructedContent += `\n<hr id="${sId}" class="scene-break border-2 border-cyan-700/50 my-8 w-1/2 mx-auto rounded-full">\n`;
+            }
+            reconstructedContent += sceneHtmls[i];
+          }
+        }
       }
       formatted.push({
         id: cleaned.id,
@@ -798,7 +818,7 @@ app.post('/api/chapters/:id', async (req, res) => {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
     const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
-    
+
     const updateData = { orderIndex, lastEdited: new Date() };
 
     if (req.body.name || (req.body.attributes && req.body.attributes.name)) {
@@ -808,74 +828,74 @@ app.post('/api/chapters/:id', async (req, res) => {
     if (content) {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
       if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
-          delete attributes.unstructured;
-          const cleanedReqAttrs = { ...req.body.attributes };
-          delete cleanedReqAttrs.name;
-          Object.assign(attributes, cleanedReqAttrs);
-          if (req.body.attributes.name) {
-              updateData.name = extractString(req.body.attributes.name);
-          }
+        delete attributes.unstructured;
+        const cleanedReqAttrs = { ...req.body.attributes };
+        delete cleanedReqAttrs.name;
+        Object.assign(attributes, cleanedReqAttrs);
+        if (req.body.attributes.name) {
+          updateData.name = extractString(req.body.attributes.name);
+        }
       }
-      
+
       // Parse scenes and beats
       let scenesData = {};
       if (cleanContent) {
-          const crypto = require('crypto');
-          const generateId = () => crypto.randomBytes(4).toString('hex');
-          
-          const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
-          
-          let currentSceneId = `scene-${generateId()}`;
-          let currentSceneText = sceneTokens[0] || '';
+        const crypto = require('crypto');
+        const generateId = () => crypto.randomBytes(4).toString('hex');
 
-          const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+        const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
 
-          const parseBeats = (sceneText) => {
-              const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
-              let beats = {};
-              let currentBeatId = `beat-${generateId()}`;
-              let currentBeatText = beatTokens[0] || '';
-              
-              if (currentBeatText.trim().length > 0) {
-                  beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
-              }
-              
-              for (let i = 1; i < beatTokens.length; i += 2) {
-                  const sep = beatTokens[i];
-                  const nextText = beatTokens[i+1] || '';
-                  const idMatch = sep.match(/id=["']([^"']+)["']/i);
-                  currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
-                  
-                  if (nextText.trim().length > 0) {
-                      beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
-                  }
-              }
-              return beats;
-          };
+        let currentSceneId = `scene-${generateId()}`;
+        let currentSceneText = sceneTokens[0] || '';
 
-          if (currentSceneText.trim().length > 0) {
-              const parsedBeats = parseBeats(currentSceneText);
-              if (Object.keys(parsedBeats).length > 0) {
-                  scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-              }
+        const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+
+        const parseBeats = (sceneText) => {
+          const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
+          let beats = {};
+          let currentBeatId = `beat-${generateId()}`;
+          let currentBeatText = beatTokens[0] || '';
+
+          if (currentBeatText.trim().length > 0) {
+            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
           }
 
-          for (let i = 1; i < sceneTokens.length; i += 2) {
-              const sep = sceneTokens[i];
-              const nextText = sceneTokens[i+1] || '';
-              
-              const idMatch = sep.match(/id=["']([^"']+)["']/i);
-              currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
-              
-              if (nextText.trim().length > 0) {
-                  const parsedBeats = parseBeats(nextText);
-                  if (Object.keys(parsedBeats).length > 0) {
-                      scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-                  }
-              }
+          for (let i = 1; i < beatTokens.length; i += 2) {
+            const sep = beatTokens[i];
+            const nextText = beatTokens[i + 1] || '';
+            const idMatch = sep.match(/id=["']([^"']+)["']/i);
+            currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
+
+            if (nextText.trim().length > 0) {
+              beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
+            }
           }
+          return beats;
+        };
+
+        if (currentSceneText.trim().length > 0) {
+          const parsedBeats = parseBeats(currentSceneText);
+          if (Object.keys(parsedBeats).length > 0) {
+            scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+          }
+        }
+
+        for (let i = 1; i < sceneTokens.length; i += 2) {
+          const sep = sceneTokens[i];
+          const nextText = sceneTokens[i + 1] || '';
+
+          const idMatch = sep.match(/id=["']([^"']+)["']/i);
+          currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
+
+          if (nextText.trim().length > 0) {
+            const parsedBeats = parseBeats(nextText);
+            if (Object.keys(parsedBeats).length > 0) {
+              scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+            }
+          }
+        }
       }
-      
+
       updateData.scenes = scenesData;
       updateData.content = ""; // Clear root content
       updateData.attributes = attributes;
@@ -950,7 +970,7 @@ app.post('/api/notes/:id', async (req, res) => {
 
     let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
     if (reqAttributes && Object.keys(reqAttributes).length > 0) {
-        delete parsedAttrs.unstructured;
+      delete parsedAttrs.unstructured;
     }
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
     const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
@@ -963,19 +983,19 @@ app.post('/api/notes/:id', async (req, res) => {
     for (const [k, v] of Object.entries(mergedAttributes)) {
       if (v === '' || v === null || v === undefined) {
         if (note.attributes && typeof note.attributes.delete === 'function') {
-            note.attributes.delete(k);
+          note.attributes.delete(k);
         } else {
-            note.set(`attributes.${k}`, undefined);
+          note.set(`attributes.${k}`, undefined);
         }
       } else {
         if (note.attributes && typeof note.attributes.set === 'function') {
-            note.attributes.set(k, v);
+          note.attributes.set(k, v);
         } else {
-            note.set(`attributes.${k}`, v);
+          note.set(`attributes.${k}`, v);
         }
       }
     }
-    
+
     // Enforce unique subtypeTag for 'dossier' and 'outline' per project
     if (targetType === 'dossier' || targetType === 'outline') {
       try {
