@@ -37,6 +37,8 @@ const TemplateSchema = new mongoose.Schema({
   templateType: String,
   content: String,
   templateBehavior: String,
+  parentAgentId: String,
+  parentAgent: String,
   nextTemplateId: String,
   model: { type: String, default: 'gemini-3.5-flash' },
   thinkingLevel: { type: String, default: 'high' },

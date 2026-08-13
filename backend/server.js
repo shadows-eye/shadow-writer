@@ -419,7 +419,7 @@ app.get('/api/templates/:id', async (req, res) => {
 app.post('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const userRole = req.headers['x-user-role'] || 'creator';
-  const { id, name, genre, templateType, content, templateBehavior, nextTemplateId, model, thinkingLevel, contextTypes, subagents } = req.body;
+  const { id, name, genre, templateType, content, templateBehavior, parentAgentId, parentAgent, nextTemplateId, model, thinkingLevel, contextTypes, subagents } = req.body;
   if (!id || !name || !genre || !templateType) return res.status(400).json({ error: 'Missing fields' });
 
   const isOverride = userRole !== 'admin';
@@ -444,6 +444,8 @@ app.post('/api/templates', async (req, res) => {
         t.templateType = templateType;
         t.content = content;
         t.templateBehavior = templateBehavior;
+        t.parentAgentId = parentAgentId || t.parentAgentId || '';
+        t.parentAgent = parentAgent || t.parentAgent || '';
         t.nextTemplateId = nextTemplateId || '';
         t.model = model || 'gemini-3.5-flash';
         t.thinkingLevel = thinkingLevel || 'high';
@@ -457,7 +459,10 @@ app.post('/api/templates', async (req, res) => {
         overrides[userId] = content;
       }
       await Template.create({
-        id, name, genre, templateType, templateBehavior, nextTemplateId: nextTemplateId || '',
+        id, name, genre, templateType, templateBehavior,
+        parentAgentId: parentAgentId || '',
+        parentAgent: parentAgent || '',
+        nextTemplateId: nextTemplateId || '',
         content: isOverride ? '' : content,
         model: model || 'gemini-3.5-flash',
         thinkingLevel: thinkingLevel || 'high',
