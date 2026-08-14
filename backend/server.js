@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const mongoose = require('mongoose');
 
 const app = express();
 
@@ -31,6 +32,7 @@ const {
   Template,
   CharacterElement,
   History,
+  Job,
   Chapter,
   Character,
   Note,
@@ -95,7 +97,7 @@ app.get('/api/project-status', async (req, res) => {
     const hasDossier = !!dossierNote || !!dossierFile;
 
     const hasCharacters = await Character.exists({ projectId: project.id });
-    
+
     const outlineNote = await Note.findOne({
       projectId: project.id,
       $or: [
@@ -120,8 +122,8 @@ app.get('/api/project-status', async (req, res) => {
     } else {
       const chaps = await Chapter.find({ projectId: project.id });
       chapters = chaps.map(c => {
-         const num = parseInt(c.id.replace(/\D/g, ''));
-         return isNaN(num) ? c.id : num;
+        const num = parseInt(c.id.replace(/\D/g, ''));
+        return isNaN(num) ? c.id : num;
       }).sort((a, b) => a - b);
     }
 
@@ -417,7 +419,7 @@ app.get('/api/templates/:id', async (req, res) => {
 app.post('/api/templates', async (req, res) => {
   const userId = req.headers['x-user-id'];
   const userRole = req.headers['x-user-role'] || 'creator';
-  const { id, name, genre, templateType, content, templateBehavior, nextTemplateId, model, thinkingLevel, contextTypes, subagents } = req.body;
+  const { id, name, genre, templateType, content, templateBehavior, parentAgentId, parentAgent, nextTemplateId, model, thinkingLevel, contextTypes, subagents } = req.body;
   if (!id || !name || !genre || !templateType) return res.status(400).json({ error: 'Missing fields' });
 
   const isOverride = userRole !== 'admin';
@@ -442,6 +444,8 @@ app.post('/api/templates', async (req, res) => {
         t.templateType = templateType;
         t.content = content;
         t.templateBehavior = templateBehavior;
+        t.parentAgentId = parentAgentId || t.parentAgentId || '';
+        t.parentAgent = parentAgent || t.parentAgent || '';
         t.nextTemplateId = nextTemplateId || '';
         t.model = model || 'gemini-3.5-flash';
         t.thinkingLevel = thinkingLevel || 'high';
@@ -455,7 +459,10 @@ app.post('/api/templates', async (req, res) => {
         overrides[userId] = content;
       }
       await Template.create({
-        id, name, genre, templateType, templateBehavior, nextTemplateId: nextTemplateId || '',
+        id, name, genre, templateType, templateBehavior,
+        parentAgentId: parentAgentId || '',
+        parentAgent: parentAgent || '',
+        nextTemplateId: nextTemplateId || '',
         content: isOverride ? '' : content,
         model: model || 'gemini-3.5-flash',
         thinkingLevel: thinkingLevel || 'high',
@@ -520,25 +527,171 @@ app.post('/api/templates/:id/chat', async (req, res) => {
 
 // --- HISTORY API ---
 app.get('/api/history', async (req, res) => {
-  const { projectId } = req.query;
-  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
-
-  const projects = await Project.find({}).lean();
-  const project = findProject(projects, projectId);
-  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const { projectId, runId, jobId } = req.query;
 
   try {
-    const list = await History.find({ projectId: project.id }).sort({ timestamp: -1 }).lean();
-    const formatted = list.map(item => ({
-      hash: item._id.toString(),
-      date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
-      message: item.log || `${item.type || 'Agent'} run`,
-      author_name: item.userId || 'AI Agent'
-    }));
-    res.json({ history: formatted });
+    let query = {};
+    if (runId || jobId) {
+      const targetId = runId || jobId;
+      query = { $or: [{ _id: mongoose.Types.ObjectId.isValid(targetId) ? new mongoose.Types.ObjectId(targetId) : null }, { jobId: targetId }, { 'payload.jobId': targetId }] };
+    } else if (projectId && projectId !== 'all' && projectId !== 'global') {
+      const projects = await Project.find({}).lean();
+      const project = findProject(projects, projectId);
+      const targetProjectId = project ? project.id : projectId;
+      query = { $or: [{ projectId: targetProjectId }, { projectId: 'global' }, { projectId: projectId }] };
+    }
+
+    const list = await History.find(query).sort({ timestamp: -1 }).limit(100).lean();
+    const formatted = list.map(item => {
+      const payload = item.payload || {};
+      return {
+        id: item._id.toString(),
+        hash: item._id.toString(),
+        jobId: item.jobId || item._id.toString(),
+        date: item.timestamp ? item.timestamp.toISOString() : new Date().toISOString(),
+        message: payload.message || `${item.pipelineType || item.type || 'AI Agent'} run`,
+        pipelineType: item.pipelineType || item.type || 'ai_chat',
+        type: item.type || item.pipelineType || 'ai_chat',
+        status: item.status || 'running',
+        progress: item.progress !== undefined ? item.progress : 0.0,
+        activeSubagentIndex: item.activeSubagentIndex || 0,
+        activeTaskIndex: item.activeTaskIndex || 0,
+        taskSequence: item.taskSequence || [],
+        thinking: item.thinking || '',
+        author_name: item.userId || 'AI Agent',
+        userPrompt: payload.userPrompt || payload.prompt || '',
+        aiResponse: payload.aiResponse || payload.response || payload.newDocText || '',
+        logs: item.logs || [],
+        modifiedDocs: item.modifiedDocs || [],
+        docId: item.docId || '',
+        diffHtml: item.diffHtml || '',
+        payload: payload
+      };
+    });
+    res.json({ history: formatted, runs: formatted });
   } catch (err) {
-    console.error(err);
+    console.error('Error fetching history:', err);
     res.status(500).json({ error: 'Failed to read history from DB' });
+  }
+});
+
+app.post('/api/history', async (req, res) => {
+  const { projectId, pipelineType, type, message, status, author_name, userPrompt, aiResponse, logs, payload, jobId, job_id, progress, activeSubagentIndex, activeTaskIndex, taskSequence, thinking, modifiedDocs, diffHtml, docId } = req.body || {};
+  const targetProjectId = projectId || 'global';
+  const finalJobId = jobId || job_id || `run_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  const resolvedType = pipelineType || type || 'ai_chat';
+
+  try {
+    const existingHistory = await History.findOne({ jobId: finalJobId });
+    const fieldsToSet = {
+      jobId: finalJobId,
+      projectId: targetProjectId,
+      userId: author_name || 'AI Agent',
+      type: resolvedType,
+      pipelineType: resolvedType,
+      status: status || 'completed',
+      progress: progress !== undefined ? progress : 1.0,
+      activeSubagentIndex: activeSubagentIndex || 0,
+      activeTaskIndex: activeTaskIndex || 0,
+      taskSequence: taskSequence || [],
+      thinking: thinking || '',
+      logs: logs || [`[INFO] Executed ${pipelineType || 'AI Agent'} run`],
+      modifiedDocs: modifiedDocs || [],
+      diffHtml: diffHtml || '',
+      docId: docId || '',
+      payload: payload || { message: message || 'AI Run', userPrompt: userPrompt || '', aiResponse: aiResponse || '' },
+      timestamp: new Date()
+    };
+
+    if (existingHistory) {
+      Object.assign(existingHistory, fieldsToSet);
+      await existingHistory.save();
+      return res.json({ success: true, history: existingHistory });
+    }
+
+    const historyItem = await History.create(fieldsToSet);
+    res.json({ success: true, history: historyItem });
+  } catch (err) {
+    console.error('Error creating history run:', err);
+    res.status(500).json({ error: 'Failed to save history entry' });
+  }
+});
+
+// --- JOBS API (Active Pipeline Job Storage) ---
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    let query = {};
+    if (projectId && projectId !== 'all' && projectId !== 'global') {
+      query = { projectId };
+    }
+    const jobsList = await Job.find(query).sort({ updatedAt: -1 }).lean();
+    res.json({ jobs: jobsList });
+  } catch (err) {
+    console.error('Error listing jobs from DB:', err);
+    res.status(500).json({ error: 'Failed to list jobs from DB' });
+  }
+});
+
+app.get('/api/jobs/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = await Job.findOne({ jobId }).lean();
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    res.json({ job });
+  } catch (err) {
+    console.error('Error fetching job from DB:', err);
+    res.status(500).json({ error: 'Failed to read job from DB' });
+  }
+});
+
+app.post('/api/jobs', async (req, res) => {
+  const data = req.body || {};
+  const jobId = data.jobId || data.id;
+  if (!jobId) {
+    return res.status(400).json({ error: 'jobId is required' });
+  }
+
+  try {
+    const fieldsToSet = {
+      jobId,
+      projectId: data.projectId || 'global',
+      pipelineType: data.pipelineType || 'braindump_to_dossier',
+      status: data.status || 'running',
+      progress: data.progress !== undefined ? data.progress : 0.0,
+      activeSubagentIndex: data.activeSubagentIndex || 0,
+      activeTaskIndex: data.activeTaskIndex || 0,
+      taskSequence: data.taskSequence || [],
+      thinking: data.thinking || '',
+      logs: data.logs || [],
+      modifiedDocs: data.modifiedDocs || [],
+      diffHtml: data.diffHtml || '',
+      payload: data.payload || {},
+      lastUpdated: new Date()
+    };
+
+    const updatedJob = await Job.findOneAndUpdate(
+      { jobId },
+      { $set: fieldsToSet },
+      { upsert: true, new: true, lean: true }
+    );
+    res.json({ success: true, job: updatedJob });
+  } catch (err) {
+    console.error('Error upserting job:', err);
+    res.status(500).json({ error: 'Failed to save job entry' });
+  }
+});
+
+app.delete('/api/jobs/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    await Job.deleteOne({ jobId });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting job:', err);
+    res.status(500).json({ error: 'Failed to delete job entry' });
   }
 });
 
@@ -560,11 +713,16 @@ app.post('/api/character-elements', async (req, res) => {
   }
 
   try {
-    const existing = await CharacterElement.findOne({ id: newElement.id });
-    if (existing) {
-      return res.status(400).json({ error: 'Character element key already defined' });
+    let element = await CharacterElement.findOne({ id: newElement.id });
+    if (element) {
+      element.name = newElement.name || element.name;
+      element.type = newElement.type || element.type;
+      element.color = newElement.color !== undefined ? newElement.color : element.color;
+      element.isTag = newElement.isTag !== undefined ? newElement.isTag : element.isTag;
+      await element.save();
+    } else {
+      element = await CharacterElement.create(newElement);
     }
-    const element = await CharacterElement.create(newElement);
     res.json({ success: true, element });
   } catch (e) {
     console.error('Error saving character element:', e);
@@ -634,13 +792,13 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys, extractString } = require('./mongoDB');
     const existingChar = await Character.findOne({ projectId: pId, id });
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
     if (inputAttrs && Object.keys(inputAttrs).length > 0) {
-        delete parsedAttrs.unstructured;
+      delete parsedAttrs.unstructured;
     }
     const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
 
@@ -651,7 +809,7 @@ app.post('/api/characters/:id', async (req, res) => {
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
     const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
     const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
-    updatedChar.name = (inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id);
+    updatedChar.name = extractString((inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id));
     updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
     updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
@@ -685,42 +843,42 @@ app.get('/api/chapters', async (req, res) => {
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
-      
+
       let reconstructedContent = cleaned.content || '';
       if (cleaned.scenes) {
-          const scenesObj = cleaned.scenes instanceof Map ? Object.fromEntries(cleaned.scenes) : cleaned.scenes;
-          if (Object.keys(scenesObj).length > 0) {
-              let sceneHtmls = [];
-              let sceneIds = Object.keys(scenesObj);
-              for (let i = 0; i < sceneIds.length; i++) {
-                  const sId = sceneIds[i];
-                  const sceneDataRaw = scenesObj[sId];
-                  const sceneData = sceneDataRaw instanceof Map ? Object.fromEntries(sceneDataRaw) : sceneDataRaw;
-                  const bObjRaw = sceneData.beats || {};
-                  const bObj = bObjRaw instanceof Map ? Object.fromEntries(bObjRaw) : bObjRaw;
-                  
-                  let beatHtmls = [];
-                  let beatIds = Object.keys(bObj);
-                  for (let j = 0; j < beatIds.length; j++) {
-                      const bId = beatIds[j];
-                      const bContent = bObj[bId];
-                      if (j > 0) {
-                          beatHtmls.push(`\n<hr id="${bId}" class="beat-break border-dashed border-gray-600 my-4">\n`);
-                      }
-                      beatHtmls.push(bContent.html || bContent.text || '');
-                  }
-                  sceneHtmls.push(beatHtmls.join(''));
-              }
+        const scenesObj = cleaned.scenes instanceof Map ? Object.fromEntries(cleaned.scenes) : cleaned.scenes;
+        if (Object.keys(scenesObj).length > 0) {
+          let sceneHtmls = [];
+          let sceneIds = Object.keys(scenesObj);
+          for (let i = 0; i < sceneIds.length; i++) {
+            const sId = sceneIds[i];
+            const sceneDataRaw = scenesObj[sId];
+            const sceneData = sceneDataRaw instanceof Map ? Object.fromEntries(sceneDataRaw) : sceneDataRaw;
+            const bObjRaw = sceneData.beats || {};
+            const bObj = bObjRaw instanceof Map ? Object.fromEntries(bObjRaw) : bObjRaw;
 
-              reconstructedContent = '';
-              for (let i = 0; i < sceneHtmls.length; i++) {
-                  const sId = sceneIds[i];
-                  if (i > 0) {
-                      reconstructedContent += `\n<hr id="${sId}" class="scene-break border-2 border-cyan-700/50 my-8 w-1/2 mx-auto rounded-full">\n`;
-                  }
-                  reconstructedContent += sceneHtmls[i];
+            let beatHtmls = [];
+            let beatIds = Object.keys(bObj);
+            for (let j = 0; j < beatIds.length; j++) {
+              const bId = beatIds[j];
+              const bContent = bObj[bId];
+              if (j > 0) {
+                beatHtmls.push(`\n<hr id="${bId}" class="beat-break border-dashed border-gray-600 my-4">\n`);
               }
+              beatHtmls.push(bContent.html || bContent.text || '');
+            }
+            sceneHtmls.push(beatHtmls.join(''));
           }
+
+          reconstructedContent = '';
+          for (let i = 0; i < sceneHtmls.length; i++) {
+            const sId = sceneIds[i];
+            if (i > 0) {
+              reconstructedContent += `\n<hr id="${sId}" class="scene-break border-2 border-cyan-700/50 my-8 w-1/2 mx-auto rounded-full">\n`;
+            }
+            reconstructedContent += sceneHtmls[i];
+          }
+        }
       }
       formatted.push({
         id: cleaned.id,
@@ -746,77 +904,85 @@ app.post('/api/chapters/:id', async (req, res) => {
   try {
     const match = id.match(/\d+/);
     const orderIndex = match ? parseInt(match[0]) : 999;
-    const { sanitizeAndStructureContent } = require('./mongoDB');
-    
+    const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
+
     const updateData = { orderIndex, lastEdited: new Date() };
+
+    if (req.body.name || (req.body.attributes && req.body.attributes.name)) {
+      updateData.name = extractString(req.body.name || req.body.attributes.name);
+    }
+
     if (content) {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
       if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
-          delete attributes.unstructured;
-          if (req.body.attributes.name) {
-              updateData.name = req.body.attributes.name;
-          }
+        delete attributes.unstructured;
+        const cleanedReqAttrs = { ...req.body.attributes };
+        delete cleanedReqAttrs.name;
+        Object.assign(attributes, cleanedReqAttrs);
+        if (req.body.attributes.name) {
+          updateData.name = extractString(req.body.attributes.name);
+        }
       }
-      
+
       // Parse scenes and beats
       let scenesData = {};
       if (cleanContent) {
-          const crypto = require('crypto');
-          const generateId = () => crypto.randomBytes(4).toString('hex');
-          
-          const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
-          
-          let currentSceneId = `scene-${generateId()}`;
-          let currentSceneText = sceneTokens[0] || '';
+        const crypto = require('crypto');
+        const generateId = () => crypto.randomBytes(4).toString('hex');
 
-          const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+        const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
 
-          const parseBeats = (sceneText) => {
-              const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
-              let beats = {};
-              let currentBeatId = `beat-${generateId()}`;
-              let currentBeatText = beatTokens[0] || '';
-              
-              if (currentBeatText.trim().length > 0) {
-                  beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
-              }
-              
-              for (let i = 1; i < beatTokens.length; i += 2) {
-                  const sep = beatTokens[i];
-                  const nextText = beatTokens[i+1] || '';
-                  const idMatch = sep.match(/id=["']([^"']+)["']/i);
-                  currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
-                  
-                  if (nextText.trim().length > 0) {
-                      beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
-                  }
-              }
-              return beats;
-          };
+        let currentSceneId = `scene-${generateId()}`;
+        let currentSceneText = sceneTokens[0] || '';
 
-          if (currentSceneText.trim().length > 0) {
-              const parsedBeats = parseBeats(currentSceneText);
-              if (Object.keys(parsedBeats).length > 0) {
-                  scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-              }
+        const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+
+        const parseBeats = (sceneText) => {
+          const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
+          let beats = {};
+          let currentBeatId = `beat-${generateId()}`;
+          let currentBeatText = beatTokens[0] || '';
+
+          if (currentBeatText.trim().length > 0) {
+            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
           }
 
-          for (let i = 1; i < sceneTokens.length; i += 2) {
-              const sep = sceneTokens[i];
-              const nextText = sceneTokens[i+1] || '';
-              
-              const idMatch = sep.match(/id=["']([^"']+)["']/i);
-              currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
-              
-              if (nextText.trim().length > 0) {
-                  const parsedBeats = parseBeats(nextText);
-                  if (Object.keys(parsedBeats).length > 0) {
-                      scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-                  }
-              }
+          for (let i = 1; i < beatTokens.length; i += 2) {
+            const sep = beatTokens[i];
+            const nextText = beatTokens[i + 1] || '';
+            const idMatch = sep.match(/id=["']([^"']+)["']/i);
+            currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
+
+            if (nextText.trim().length > 0) {
+              beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
+            }
           }
+          return beats;
+        };
+
+        if (currentSceneText.trim().length > 0) {
+          const parsedBeats = parseBeats(currentSceneText);
+          if (Object.keys(parsedBeats).length > 0) {
+            scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+          }
+        }
+
+        for (let i = 1; i < sceneTokens.length; i += 2) {
+          const sep = sceneTokens[i];
+          const nextText = sceneTokens[i + 1] || '';
+
+          const idMatch = sep.match(/id=["']([^"']+)["']/i);
+          currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
+
+          if (nextText.trim().length > 0) {
+            const parsedBeats = parseBeats(nextText);
+            if (Object.keys(parsedBeats).length > 0) {
+              scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
+            }
+          }
+        }
       }
-      
+
       updateData.scenes = scenesData;
       updateData.content = ""; // Clear root content
       updateData.attributes = attributes;
@@ -880,18 +1046,18 @@ app.get('/api/notes/:id', async (req, res) => {
 
 app.post('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId, attributes: reqAttributes } = req.body;
-  if (!content && !reqAttributes) return res.status(400).json({ error: 'Missing content or attributes' });
+  const { name, content, projectId, attributes: reqAttributes } = req.body;
+  if (!content && !reqAttributes && !name) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj } = require('./mongoDB');
+    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, extractString } = require('./mongoDB');
     const existingNote = await Note.findOne({ projectId: pId, id });
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
     let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
     if (reqAttributes && Object.keys(reqAttributes).length > 0) {
-        delete parsedAttrs.unstructured;
+      delete parsedAttrs.unstructured;
     }
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
     const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
@@ -904,21 +1070,45 @@ app.post('/api/notes/:id', async (req, res) => {
     for (const [k, v] of Object.entries(mergedAttributes)) {
       if (v === '' || v === null || v === undefined) {
         if (note.attributes && typeof note.attributes.delete === 'function') {
-            note.attributes.delete(k);
+          note.attributes.delete(k);
         } else {
-            note.set(`attributes.${k}`, undefined);
+          note.set(`attributes.${k}`, undefined);
         }
       } else {
         if (note.attributes && typeof note.attributes.set === 'function') {
-            note.attributes.set(k, v);
+          note.attributes.set(k, v);
         } else {
-            note.set(`attributes.${k}`, v);
+          note.set(`attributes.${k}`, v);
         }
       }
     }
-    
-    const reqAttributesName = reqAttributes && reqAttributes.name;
-    note.name = reqAttributesName || normName || note.name || id;
+
+    // Enforce unique subtypeTag for 'dossier' and 'outline' per project
+    if (targetType === 'dossier' || targetType === 'outline') {
+      try {
+        const conflictingNotes = await Note.find({ projectId: pId, id: { $ne: normId } });
+        for (const confNote of conflictingNotes) {
+          const confTag = confNote.attributes && confNote.attributes.get ? confNote.attributes.get('subtypeTag') : (confNote.attributes || {}).subtypeTag;
+          if (confTag === targetType) {
+            if (confNote.attributes && typeof confNote.attributes.set === 'function') {
+              confNote.attributes.set('subtypeTag', 'notes');
+              confNote.attributes.set('type', 'notes');
+            } else if (confNote.attributes) {
+              confNote.attributes.subtypeTag = 'notes';
+              confNote.attributes.type = 'notes';
+            }
+            confNote.type = 'notes';
+            confNote.markModified('attributes');
+            await confNote.save();
+          }
+        }
+      } catch (errConf) {
+        console.error('Error unsetting duplicate unique subtypeTag:', errConf);
+      }
+    }
+
+    const reqName = name || (reqAttributes && reqAttributes.name);
+    note.name = extractString(reqName) || extractString(normName) || note.name || id;
     note.type = targetType;
     note.content = "";
     note.markModified('attributes');
