@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.0] - 2026-08-13
+
+### Added
+- **Mongoose Template Schema Extensions (`backend/mongoDB.js`)**: Updated `TemplateSchema` with nested `subagents` array (`step`, `subagentTemplateId`, `contextInputs`, `outputType`, `outputId`), `parentAgentId`, `outputType`, and `outputId` for hierarchical pipeline orchestration.
+- **MongoDB Job Collection & Schema**: Added `JobSchema` and `Job` model to track asynchronous multi-subagent background execution pipelines (`jobId`, `projectId`, `pipelineType`, `status`, `logs`, `runs`, `currentStep`, `totalSteps`, `pendingDiffs`).
+- **Job REST API Endpoints (`backend/server.js`)**: Added `POST /api/jobs`, `GET /api/jobs/:id`, `PATCH /api/jobs/:id`, and `GET /api/jobs/active/:projectId` endpoints for pipeline run management.
+- **Input Sanitization Helper**: Added `extractString` helper in `mongoDB.js` to clean string inputs (such as document names) before database persistence.
+- **Clean Document Persistence Middleware**: Added `ensureCleanDocumentOnRead` middleware on `/api/notes`, `/api/characters`, and `/api/chapters` endpoints to strip bad formatting on reads/writes while preserving unstructured fallbacks (`note.content`).
+
+### Changed
+- **Execution History API Enhancements**: Updated `/api/history` endpoints to persist and return `pipelineType`, `jobId`, `payload`, `logs`, and `runs`.
+- **Character Elements Upsert**: Extended `/api/character-elements` endpoint to support upsert workflows.
+
+### Fixed
+- **Unique Subtype Tag Integrity**: Enforced project-level uniqueness for **Master Dossier (`subtypeTag: 'dossier'`)** and **Story Outline (`subtypeTag: 'outline'`)**. Tagging a new note automatically reverts previous dossier/outline tags back to standard notes.
+
+---
+
 ## [1.8.2] - 2026-08-11
 
 ### Added
