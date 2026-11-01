@@ -29,9 +29,75 @@ const ProjectSchema = new mongoose.Schema({
   templates: [String],
   writingPOV: String,
   writingTense: String,
-  genre: String
+  genre: String,
+  customFilterCategories: [{
+    id: String,
+    icon: String,
+    color: String,
+    labels: {
+      en: String,
+      de: String
+    },
+    aliases: [String]
+  }]
 });
 const Project = mongoose.model('Project', ProjectSchema);
+
+const GenreSchema = new mongoose.Schema({
+  id: { type: String, unique: true, required: true },
+  name: { type: String, required: true },
+  labels: {
+    en: { type: String, required: true },
+    de: { type: String, required: true }
+  },
+  filterCategories: [{
+    id: { type: String, required: true },
+    icon: { type: String, default: '📌' },
+    color: { type: String, default: 'bg-gray-800 text-gray-300 border-gray-700' },
+    labels: {
+      en: { type: String, required: true },
+      de: { type: String, required: true }
+    },
+    aliases: [{ type: String }]
+  }],
+  sceneTypes: [{
+    id: { type: String, required: true },
+    icon: { type: String, default: '💡' },
+    labels: {
+      en: { type: String, required: true },
+      de: { type: String, required: true }
+    }
+  }],
+  characterArchetypes: [{
+    id: { type: String, required: true },
+    icon: { type: String, default: '👤' },
+    labels: {
+      en: { type: String, required: true },
+      de: { type: String, required: true }
+    }
+  }],
+  chapterDirectives: [{
+    id: { type: String, required: true },
+    icon: { type: String, default: '📝' },
+    labels: {
+      en: { type: String, required: true },
+      de: { type: String, required: true }
+    }
+  }],
+  outlinePresets: [{
+    id: { type: String, required: true },
+    targetChapters: { type: Number, default: 24 },
+    labels: {
+      en: { type: String, required: true },
+      de: { type: String, required: true }
+    },
+    acts: {
+      en: [{ type: String }],
+      de: [{ type: String }]
+    }
+  }]
+});
+const Genre = mongoose.model('Genre', GenreSchema);
 
 const TemplateSchema = new mongoose.Schema({
   id: { type: String, unique: true, required: true },
@@ -76,7 +142,12 @@ const CharacterElementSchema = new mongoose.Schema({
   details: String,
   description: String,
   characteristics: String,
-  customAttributes: { type: Map, of: String }
+  customAttributes: { type: Map, of: String },
+  genres: { type: [String], default: ['All'] },
+  labels: {
+    en: String,
+    de: String
+  }
 });
 const CharacterElement = mongoose.model('CharacterElement', CharacterElementSchema);
 
@@ -421,6 +492,26 @@ async function seedDatabaseIfEmpty() {
       }
     } catch (err) {
       console.error('Failed to sync templates:', err);
+    }
+  }
+
+  // 1b. Seed / Sync Genres from genres.json
+  const genresPath = path.join(__dirname, 'public', 'genres.json');
+  if (fs.existsSync(genresPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(genresPath, 'utf8'));
+      if (data && data.length > 0) {
+        for (const g of data) {
+          await Genre.updateOne(
+            { id: g.id },
+            { $set: g },
+            { upsert: true }
+          );
+        }
+        console.log(`✓ Auto-seeded / synced ${data.length} genres from genres.json into MongoDB.`);
+      }
+    } catch (err) {
+      console.error('Failed to sync genres:', err);
     }
   }
 
@@ -1050,6 +1141,7 @@ module.exports = {
   getDynamicAttributeKeys,
   findProject,
   Project,
+  Genre,
   Template,
   CharacterElement,
   History,

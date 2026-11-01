@@ -1,0 +1,962 @@
+[
+  {
+    "id": "romantic_suspense",
+    "name": "Romantic Suspense",
+    "labels": {
+      "en": "Romantic Suspense",
+      "de": "Romantic Suspense"
+    },
+    "filterCategories": [
+      {
+        "id": "locations",
+        "icon": "📍",
+        "color": "bg-rose-950/40 text-rose-300 border-rose-800/60",
+        "labels": {
+          "en": "Locations & Safe Houses",
+          "de": "Schauplätze & Rückzugsorte"
+        },
+        "aliases": ["location", "locations", "safehouse", "safehouses", "schauplatz", "schauplaetze", "ort", "orte", "rueckzugsort", "setting"]
+      },
+      {
+        "id": "organizations",
+        "icon": "🏛️",
+        "color": "bg-blue-950/40 text-blue-300 border-blue-800/60",
+        "labels": {
+          "en": "Families, Groups & Agencies",
+          "de": "Familien, Kreise & Behörden"
+        },
+        "aliases": ["organization", "organizations", "family", "families", "agency", "agencies", "behoerde", "behoerden", "familie", "familien", "kreis", "kreise"]
+      },
+      {
+        "id": "secrets",
+        "icon": "🔍",
+        "color": "bg-amber-950/40 text-amber-300 border-amber-800/60",
+        "labels": {
+          "en": "Secrets, Clues & Motives",
+          "de": "Geheimnisse, Indizien & Motive"
+        },
+        "aliases": ["secret", "secrets", "clue", "clues", "motive", "motives", "geheimnis", "geheimnisse", "indiz", "indizien", "motiv", "motive"]
+      },
+      {
+        "id": "lore",
+        "icon": "📜",
+        "color": "bg-purple-950/40 text-purple-300 border-purple-800/60",
+        "labels": {
+          "en": "Backstory & Relationships",
+          "de": "Vorgeschichte & Beziehungen"
+        },
+        "aliases": ["lore", "backstory", "relationship", "relationships", "vorgeschichte", "beziehung", "beziehungen"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "high_stakes_protection",
+        "icon": "🛡️",
+        "labels": {
+          "en": "High-Stakes Protection & Bodyguard Tension",
+          "de": "Personenschutz & Hochspannung"
+        }
+      },
+      {
+        "id": "undercover_secrets",
+        "icon": "🕵️",
+        "labels": {
+          "en": "Undercover Secrets & Betrayal",
+          "de": "Verdeckte Ermittlung & Geheimnisse"
+        }
+      },
+      {
+        "id": "romantic_friction",
+        "icon": "⚡",
+        "labels": {
+          "en": "Romantic Friction & Trust Issues",
+          "de": "Romantische Spannung & Vertrauenskonflikte"
+        }
+      },
+      {
+        "id": "small_town_intrigue",
+        "icon": "🏡",
+        "labels": {
+          "en": "Small-Town & Family Intrigue",
+          "de": "Kleinstadt- & Familiendynamik"
+        }
+      },
+      {
+        "id": "forensic_investigation",
+        "icon": "🔍",
+        "labels": {
+          "en": "Forensic Clues & Investigation",
+          "de": "Spurensuche & Enthüllung"
+        }
+      },
+      {
+        "id": "deadly_pursuit",
+        "icon": "🚨",
+        "labels": {
+          "en": "Deadly Pursuit & Climax",
+          "de": "Gefährliche Verfolgung & Finale"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "protector_investigator",
+        "icon": "🛡️",
+        "labels": {
+          "en": "Protector / Investigator",
+          "de": "Beschützer / Ermittler"
+        }
+      },
+      {
+        "id": "guarded_protagonist",
+        "icon": "👤",
+        "labels": {
+          "en": "Guarded Protagonist",
+          "de": "Verletzliche Hauptfigur"
+        }
+      },
+      {
+        "id": "suspect_rival",
+        "icon": "🎭",
+        "labels": {
+          "en": "Suspect / Rival",
+          "de": "Verdächtiger / Rivale"
+        }
+      },
+      {
+        "id": "confidant_ally",
+        "icon": "🤝",
+        "labels": {
+          "en": "Confidant / Ally",
+          "de": "Vertrauter / Verbündeter"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "escalate_danger",
+        "icon": "⚠️",
+        "labels": {
+          "en": "Escalate external threat or stalker proximity",
+          "de": "Äußere Bedrohung oder Gefahr verschärfen"
+        }
+      },
+      {
+        "id": "emotional_vulnerability",
+        "icon": "💔",
+        "labels": {
+          "en": "Force emotional vulnerability between leads",
+          "de": "Emotionale Verletzlichkeit zwischen den Hauptfiguren erzwingen"
+        }
+      },
+      {
+        "id": "reveal_clue",
+        "icon": "🔍",
+        "labels": {
+          "en": "Drop a new forensic clue or red herring",
+          "de": "Neues Indiz oder falsche Fährte enthüllen"
+        }
+      },
+      {
+        "id": "romantic_tension",
+        "icon": "🔥",
+        "labels": {
+          "en": "Intensify romantic tension under close quarters",
+          "de": "Romantische Spannung unter räumlicher Nähe steigern"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "24_chapter_suspense",
+        "targetChapters": 24,
+        "labels": {
+          "en": "24-Chapter Romantic Suspense Arc",
+          "de": "24-Kapitel Romantic Suspense Struktur"
+        },
+        "acts": {
+          "en": [
+            "Act I: Threat Eruption & Guarded Alliance (Ch. 1-6)",
+            "Act II-A: Deepening Investigation & Forced Proximity (Ch. 7-12)",
+            "Act II-B: Secrets Exposed & Breaking Point (Ch. 13-18)",
+            "Act III: Confronting the Threat & Hard-Won Love (Ch. 19-24)"
+          ],
+          "de": [
+            "Akt I: Bedrohung bricht aus & Zweifelndes Bündnis (Kap. 1-6)",
+            "Akt II-A: Ermittlung vertieft & Erzwungene Nähe (Kap. 7-12)",
+            "Akt II-B: Geheimnisse enthüllt & Wendepunkt (Kap. 13-18)",
+            "Akt III: Finale Konfrontation & Verdiente Liebe (Kap. 19-24)"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "romance",
+    "name": "Romance",
+    "labels": {
+      "en": "Romance",
+      "de": "Romance"
+    },
+    "filterCategories": [
+      {
+        "id": "locations",
+        "icon": "🏡",
+        "color": "bg-pink-950/40 text-pink-300 border-pink-800/60",
+        "labels": {
+          "en": "Settings & Venues",
+          "de": "Schauplätze & Wohlfühlorte"
+        },
+        "aliases": ["location", "locations", "setting", "venue", "venues", "schauplatz", "schauplaetze", "ort", "orte", "wohlfuehlort"]
+      },
+      {
+        "id": "organizations",
+        "icon": "🥂",
+        "color": "bg-purple-950/40 text-purple-300 border-purple-800/60",
+        "labels": {
+          "en": "Social Circles & Families",
+          "de": "Freundeskreis & Familie"
+        },
+        "aliases": ["social_circle", "social", "circle", "family", "families", "freundeskreis", "familie", "familien", "organisation"]
+      },
+      {
+        "id": "tropes",
+        "icon": "💖",
+        "color": "bg-rose-950/40 text-rose-300 border-rose-800/60",
+        "labels": {
+          "en": "Relationship Dynamics & Tropes",
+          "de": "Beziehungsdynamik & Tropes"
+        },
+        "aliases": ["trope", "tropes", "dynamic", "dynamics", "beziehungsdynamik", "beziehung"]
+      },
+      {
+        "id": "lore",
+        "icon": "📜",
+        "color": "bg-amber-950/40 text-amber-300 border-amber-800/60",
+        "labels": {
+          "en": "Shared History & Traditions",
+          "de": "Gemeinsame Vergangenheit & Traditionen"
+        },
+        "aliases": ["lore", "history", "tradition", "traditions", "vergangenheit", "tradition", "traditionen"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "enemies_to_lovers",
+        "icon": "⚔️",
+        "labels": {
+          "en": "Enemies to Lovers & Banter",
+          "de": "Enemies to Lovers & Schlagabtausch"
+        }
+      },
+      {
+        "id": "emotional_intimacy",
+        "icon": "💞",
+        "labels": {
+          "en": "Emotional Intimacy & Vulnerability",
+          "de": "Emotionale Nähe & Verletzlichkeit"
+        }
+      },
+      {
+        "id": "social_scandal",
+        "icon": "👑",
+        "labels": {
+          "en": "Social Scandal & Reputation",
+          "de": "Skandal & Gesellschaftsdruck"
+        }
+      },
+      {
+        "id": "heartbreak_crisis",
+        "icon": "💔",
+        "labels": {
+          "en": "Heartbreak & Misunderstanding",
+          "de": "Herzschmerz & Krise"
+        }
+      },
+      {
+        "id": "second_chance",
+        "icon": "⏳",
+        "labels": {
+          "en": "Second Chance & Deep History",
+          "de": "Second Chance & Alte Wunden"
+        }
+      },
+      {
+        "id": "cozy_warmth",
+        "icon": "☕",
+        "labels": {
+          "en": "Cozy Small-Town Warmth",
+          "de": "Kleinstadt-Romantik & Geborgenheit"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "romantic_lead",
+        "icon": "🌟",
+        "labels": {
+          "en": "Romantic Lead",
+          "de": "Hauptfigur"
+        }
+      },
+      {
+        "id": "love_interest",
+        "icon": "💖",
+        "labels": {
+          "en": "Love Interest",
+          "de": "Love Interest"
+        }
+      },
+      {
+        "id": "best_friend",
+        "icon": "☕",
+        "labels": {
+          "en": "Best Friend / Confidant",
+          "de": "Beste/r Freund/in"
+        }
+      },
+      {
+        "id": "ex_rival",
+        "icon": "⚡",
+        "labels": {
+          "en": "Ex / Rival",
+          "de": "Ex / Rivale"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "advance_attraction",
+        "icon": "🔥",
+        "labels": {
+          "en": "Advance mutual physical or emotional attraction",
+          "de": "Gegenseitige Anziehung spürbar verstärken"
+        }
+      },
+      {
+        "id": "internal_conflict",
+        "icon": "💭",
+        "labels": {
+          "en": "Deepen internal flaw holding back commitment",
+          "de": "Inneren Konflikt gegen Bindung vertiefen"
+        }
+      },
+      {
+        "id": "witty_banter",
+        "icon": "💬",
+        "labels": {
+          "en": "Create high-chemistry dialogue and banter",
+          "de": "Schlagfertigen Dialog mit spürbarer Chemie inszenieren"
+        }
+      },
+      {
+        "id": "romantic_gesture",
+        "icon": "🎁",
+        "labels": {
+          "en": "Deliver an emotionally resonant small gesture",
+          "de": "Bedeutungsvolle kleine Geste einbauen"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "20_chapter_romance",
+        "targetChapters": 20,
+        "labels": {
+          "en": "20-Chapter Romance Beat Sheet",
+          "de": "20-Kapitel Romance Struktur"
+        },
+        "acts": {
+          "en": [
+            "Act I: Meet Cute & Sparks (Ch. 1-5)",
+            "Act II-A: Falling Fast & Denying Feelings (Ch. 6-10)",
+            "Act II-B: Midpoint Intimacy & Looming Conflict (Ch. 11-15)",
+            "Act III: Dark Night of the Heart & Grand Gesture (Ch. 16-20)"
+          ],
+          "de": [
+            "Akt I: Erste Begegnung & Funken (Kap. 1-5)",
+            "Akt II-A: Annäherung & Verleugnung (Kap. 6-10)",
+            "Akt II-B: Intimität & Schwelender Konflikt (Kap. 11-15)",
+            "Akt III: Krise der Trennung & Große Geste (Kap. 16-20)"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "science_fiction",
+    "name": "Science Fiction",
+    "labels": {
+      "en": "Science Fiction",
+      "de": "Science Fiction"
+    },
+    "filterCategories": [
+      {
+        "id": "locations",
+        "icon": "🪐",
+        "color": "bg-cyan-950/40 text-cyan-300 border-cyan-800/60",
+        "labels": {
+          "en": "Locations & Star Systems",
+          "de": "Orte & Sternensysteme"
+        },
+        "aliases": ["location", "locations", "system", "star_system", "planet", "sector", "orte", "sternensysteme", "schauplatz", "schauplaetze"]
+      },
+      {
+        "id": "technology",
+        "icon": "⚡",
+        "color": "bg-blue-950/40 text-blue-300 border-blue-800/60",
+        "labels": {
+          "en": "Technology & Artifacts",
+          "de": "Technologie & Artefakte"
+        },
+        "aliases": ["technology", "tech", "artifact", "artifacts", "weapon", "weapons", "ship", "ships", "technologie", "artefakt", "artefakte"]
+      },
+      {
+        "id": "races",
+        "icon": "🚩",
+        "color": "bg-indigo-950/40 text-indigo-300 border-indigo-800/60",
+        "labels": {
+          "en": "Species & Factions",
+          "de": "Spezies & Fraktionen"
+        },
+        "aliases": ["race", "races", "species", "faction", "factions", "spezies", "fraktion", "fraktionen", "voelker"]
+      },
+      {
+        "id": "lore",
+        "icon": "📜",
+        "color": "bg-violet-950/40 text-violet-300 border-violet-800/60",
+        "labels": {
+          "en": "Galactic Lore & History",
+          "de": "Galaktische Lore & Chronik"
+        },
+        "aliases": ["lore", "history", "chronicle", "galaxy", "chronik", "geschichte"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "fleet_warfare",
+        "icon": "🚀",
+        "labels": {
+          "en": "Visceral Combat & Fleet Warfare",
+          "de": "Flottenkrieg & Gefechte"
+        }
+      },
+      {
+        "id": "cosmic_threat",
+        "icon": "🌌",
+        "labels": {
+          "en": "Dark Sci-Fi & Cosmic Threat",
+          "de": "Dunkle Sci-Fi & Kosmische Bedrohung"
+        }
+      },
+      {
+        "id": "political_intrigue",
+        "icon": "🏛️",
+        "labels": {
+          "en": "Political Intrigue & Espionage",
+          "de": "Politische Intrigen & Spionage"
+        }
+      },
+      {
+        "id": "ancient_lore_exploration",
+        "icon": "🧭",
+        "labels": {
+          "en": "Exploration & Ancient Lore",
+          "de": "Erforschung & Uralte Lore"
+        }
+      },
+      {
+        "id": "ai_cybernetics",
+        "icon": "🤖",
+        "labels": {
+          "en": "AI & Cybernetics",
+          "de": "KI & Kybernetik"
+        }
+      },
+      {
+        "id": "quantum_anomalies",
+        "icon": "⚛️",
+        "labels": {
+          "en": "Quantum Physics & Anomalies",
+          "de": "Quantenphysik & Anomalien"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "commander_lead",
+        "icon": "🎖️",
+        "labels": {
+          "en": "Commander / Lead",
+          "de": "Kommandant / Lead"
+        }
+      },
+      {
+        "id": "warlord_antagonist",
+        "icon": "⚔️",
+        "labels": {
+          "en": "Warlord / Antagonist",
+          "de": "Kriegsherr / Antagonist"
+        }
+      },
+      {
+        "id": "engineer_specialist",
+        "icon": "🔧",
+        "labels": {
+          "en": "Engineer / Specialist",
+          "de": "Ingenieur / Spezialist"
+        }
+      },
+      {
+        "id": "synthetic_companion",
+        "icon": "🤖",
+        "labels": {
+          "en": "Synthetic / Companion",
+          "de": "Synthetik / Begleiter"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "tactical_maneuver",
+        "icon": "🚀",
+        "labels": {
+          "en": "Detail strategic ship maneuvers or technology application",
+          "de": "Taktische Manöver oder Technologieeinsatz beschreiben"
+        }
+      },
+      {
+        "id": "cosmic_scope",
+        "icon": "🌌",
+        "labels": {
+          "en": "Expand scale of galactic stakes or political fallout",
+          "de": "Galaktische Tragweite und politische Folgen spürbar machen"
+        }
+      },
+      {
+        "id": "high_tech_problem",
+        "icon": "⚙️",
+        "labels": {
+          "en": "Introduce high-concept technological or physical anomaly",
+          "de": "Anspruchsvolle technologische oder physikalische Anomalie einführen"
+        }
+      },
+      {
+        "id": "crew_dynamics",
+        "icon": "👥",
+        "labels": {
+          "en": "Highlight chain of command and crew friction",
+          "de": "Hierarchie und Spannungen in der Crew betonen"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "28_chapter_space_opera",
+        "targetChapters": 28,
+        "labels": {
+          "en": "28-Chapter Space Opera Odyssey",
+          "de": "28-Kapitel Space Opera Epos"
+        },
+        "acts": {
+          "en": [
+            "Act I: System Inciting Incident & Mobilization (Ch. 1-7)",
+            "Act II-A: Frontline Clashes & Dark Discoveries (Ch. 8-14)",
+            "Act II-B: Betrayal & Tactical Retreat (Ch. 15-21)",
+            "Act III: Galactic Coalition & Decisive Battle (Ch. 22-28)"
+          ],
+          "de": [
+            "Akt I: Vorfall im Heimatsystem & Mobilmachung (Kap. 1-7)",
+            "Akt II-A: Erste Gefechte & Düstere Entdeckungen (Kap. 8-14)",
+            "Akt II-B: Verrat & Taktischer Rückzug (Kap. 15-21)",
+            "Akt III: Koalition & Entscheidungsschlacht (Kap. 22-28)"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "fantasy",
+    "name": "Fantasy",
+    "labels": {
+      "en": "Fantasy",
+      "de": "Fantasy"
+    },
+    "filterCategories": [
+      {
+        "id": "locations",
+        "icon": "🏰",
+        "color": "bg-emerald-950/40 text-emerald-300 border-emerald-800/60",
+        "labels": {
+          "en": "Realms & Locations",
+          "de": "Reiche & Schauplätze"
+        },
+        "aliases": ["location", "locations", "realm", "realms", "kingdom", "kingdoms", "reiche", "schauplaetze", "ort", "orte"]
+      },
+      {
+        "id": "magic",
+        "icon": "🔮",
+        "color": "bg-purple-950/40 text-purple-300 border-purple-800/60",
+        "labels": {
+          "en": "Magic Systems & Relics",
+          "de": "Magiesysteme & Artefakte"
+        },
+        "aliases": ["magic", "spell", "spells", "relic", "relics", "artifact", "artifacts", "magie", "artefakt", "artefakte", "zauber"]
+      },
+      {
+        "id": "races",
+        "icon": "🛡️",
+        "color": "bg-amber-950/40 text-amber-300 border-amber-800/60",
+        "labels": {
+          "en": "Peoples, Kingdoms & Guilds",
+          "de": "Völker, Königreiche & Gilden"
+        },
+        "aliases": ["race", "races", "people", "peoples", "guild", "guilds", "faction", "factions", "voelker", "koenigreiche", "gilden", "fraktion"]
+      },
+      {
+        "id": "lore",
+        "icon": "📜",
+        "color": "bg-blue-950/40 text-blue-300 border-blue-800/60",
+        "labels": {
+          "en": "Mythos, Prophecies & Lore",
+          "de": "Mythen, Prophezeiungen & Geschichte"
+        },
+        "aliases": ["lore", "myth", "myths", "prophecy", "prophecies", "mythen", "prophezeiungen", "geschichte", "chronik"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "siege_warfare",
+        "icon": "⚔️",
+        "labels": {
+          "en": "Siege Warfare & Epic Battles",
+          "de": "Epische Schlachten & Belagerung"
+        }
+      },
+      {
+        "id": "ancient_magic_quests",
+        "icon": "🔮",
+        "labels": {
+          "en": "Ancient Magic & Artifact Quests",
+          "de": "Alte Magie & Artefakt-Queste"
+        }
+      },
+      {
+        "id": "court_intrigue",
+        "icon": "👑",
+        "labels": {
+          "en": "Royal Court Intrigue",
+          "de": "Hofintrigen & Machtspiele"
+        }
+      },
+      {
+        "id": "realm_exploration",
+        "icon": "🗺️",
+        "labels": {
+          "en": "Mythic Realm Exploration",
+          "de": "Reise durch verbotene Lande"
+        }
+      },
+      {
+        "id": "mythological_hunts",
+        "icon": "🐉",
+        "labels": {
+          "en": "Mythological Beasts & Hunts",
+          "de": "Mythische Wesen & Monsterjagd"
+        }
+      },
+      {
+        "id": "forbidden_spells",
+        "icon": "✨",
+        "labels": {
+          "en": "Forbidden Spells & Covens",
+          "de": "Verbotene Magie & Geheimbünde"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "archmage_spellcaster",
+        "icon": "🧙",
+        "labels": {
+          "en": "Archmage / Spellcaster",
+          "de": "Erzmagier / Zauberwirker"
+        }
+      },
+      {
+        "id": "monarch_heir",
+        "icon": "👑",
+        "labels": {
+          "en": "Monarch / Heir",
+          "de": "Monarch / Thronerbe"
+        }
+      },
+      {
+        "id": "paladin_champion",
+        "icon": "🛡️",
+        "labels": {
+          "en": "Paladin / Champion",
+          "de": "Paladin / Streiter"
+        }
+      },
+      {
+        "id": "rogue_assassin",
+        "icon": "🗡️",
+        "labels": {
+          "en": "Rogue / Assassin",
+          "de": "Schurke / Assassine"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "magic_cost",
+        "icon": "🔮",
+        "labels": {
+          "en": "Show the cost or toll of casting magic",
+          "de": "Preis und Erschöpfung durch Magie spürbar machen"
+        }
+      },
+      {
+        "id": "world_mythology",
+        "icon": "📜",
+        "labels": {
+          "en": "Weave in ancient lore or songs of the realm",
+          "de": "Uralte Legenden oder Lieder des Reiches einflechten"
+        }
+      },
+      {
+        "id": "oath_conflict",
+        "icon": "⚔️",
+        "labels": {
+          "en": "Challenge an oath, vow, or code of honor",
+          "de": "Einen Eid, Schwur oder Ehrenkodex auf die Probe stellen"
+        }
+      },
+      {
+        "id": "creature_encounter",
+        "icon": "🐉",
+        "labels": {
+          "en": "Feature sensory encounter with mythical flora or fauna",
+          "de": "Atmosphärische Begegnung mit mythischen Wesen inszenieren"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "24_chapter_heroic_quest",
+        "targetChapters": 24,
+        "labels": {
+          "en": "24-Chapter Heroic Quest",
+          "de": "24-Kapitel Heroische Heldenreise"
+        },
+        "acts": {
+          "en": [
+            "Act I: Realm in Peril & Call to Adventure (Ch. 1-6)",
+            "Act II-A: Crossing into the Wilds & Trials (Ch. 7-12)",
+            "Act II-B: Dark Fortress & Sacrifice (Ch. 13-18)",
+            "Act III: Clash of Powers & New Dawn (Ch. 19-24)"
+          ],
+          "de": [
+            "Akt I: Bedrohung des Reiches & Aufbruch (Kap. 1-6)",
+            "Akt II-A: Pfad durch die Wildnis & Prüfungen (Kap. 7-12)",
+            "Akt II-B: Die finstere Festung & Opfer (Kap. 13-18)",
+            "Akt III: Duell der Mächte & Neuer Tag (Kap. 19-24)"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "scifi_horror",
+    "name": "Sci-Fi Horror",
+    "labels": {
+      "en": "Sci-Fi Horror",
+      "de": "Sci-Fi Horror"
+    },
+    "filterCategories": [
+      {
+        "id": "locations",
+        "icon": "🛰️",
+        "color": "bg-red-950/40 text-red-300 border-red-800/60",
+        "labels": {
+          "en": "Stations, Vessels & Zones",
+          "de": "Stationen, Schiffe & Sektoren"
+        },
+        "aliases": ["location", "locations", "station", "stations", "vessel", "vessels", "zone", "zones", "stationen", "schiffe", "sektoren", "schauplatz"]
+      },
+      {
+        "id": "anomalies",
+        "icon": "☣️",
+        "color": "bg-emerald-950/40 text-emerald-300 border-emerald-800/60",
+        "labels": {
+          "en": "Contagions, Entities & Tech",
+          "de": "Anomalien, Organismen & Technik"
+        },
+        "aliases": ["anomaly", "anomalies", "contagion", "entity", "tech", "technology", "anomalien", "organismen", "technik", "infektion"]
+      },
+      {
+        "id": "factions",
+        "icon": "🚩",
+        "color": "bg-zinc-950/40 text-zinc-300 border-zinc-800/60",
+        "labels": {
+          "en": "Crews, Corporations & Cults",
+          "de": "Crews, Konzerne & Kulte"
+        },
+        "aliases": ["faction", "factions", "crew", "corporation", "cult", "crews", "konzerne", "kulte", "fraktion", "gruppe"]
+      },
+      {
+        "id": "lore",
+        "icon": "📜",
+        "color": "bg-amber-950/40 text-amber-300 border-amber-800/60",
+        "labels": {
+          "en": "Incident Logs & Lore",
+          "de": "Vorfallsprotokolle & Hintergrund"
+        },
+        "aliases": ["lore", "log", "logs", "incident", "protocol", "vorfallsprotokolle", "protokolle", "hintergrund"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "cosmic_horror_entities",
+        "icon": "🐙",
+        "labels": {
+          "en": "Cosmic Horror & Entities",
+          "de": "Kosmischer Horror & Entitäten"
+        }
+      },
+      {
+        "id": "biological_contagion",
+        "icon": "☣️",
+        "labels": {
+          "en": "Biological Contagion & Mutation",
+          "de": "Biologische Kontamination & Mutation"
+        }
+      },
+      {
+        "id": "deep_space_isolation",
+        "icon": "🛰️",
+        "labels": {
+          "en": "Claustrophobic Deep-Space Isolation",
+          "de": "Klaustrophobische Isolation"
+        }
+      },
+      {
+        "id": "cybernetic_body_horror",
+        "icon": "🩻",
+        "labels": {
+          "en": "Cybernetic Malfunction & Body Horror",
+          "de": "Fehlfunktion & Body Horror"
+        }
+      },
+      {
+        "id": "psychological_paranoia",
+        "icon": "👁️",
+        "labels": {
+          "en": "Psychological Paranoia",
+          "de": "Psychologische Paranoia"
+        }
+      },
+      {
+        "id": "quarantine_survival",
+        "icon": "🚨",
+        "labels": {
+          "en": "Quarantine Breach & Survival",
+          "de": "Quarantänebruch & Überlebenskampf"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "sole_survivor_officer",
+        "icon": "🧑‍🚀",
+        "labels": {
+          "en": "Sole Survivor / Officer",
+          "de": "Überlebender / Offizier"
+        }
+      },
+      {
+        "id": "corporate_agent",
+        "icon": "💼",
+        "labels": {
+          "en": "Corporate Agent",
+          "de": "Konzernagent"
+        }
+      },
+      {
+        "id": "science_specialist",
+        "icon": "🔬",
+        "labels": {
+          "en": "Medical/Science Specialist",
+          "de": "Wissenschaftler / Mediziner"
+        }
+      },
+      {
+        "id": "compromised_crew",
+        "icon": "☣️",
+        "labels": {
+          "en": "Compromised Crew",
+          "de": "Infiziertes Crewmitglied"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "claustrophobia_dread",
+        "icon": "🕯️",
+        "labels": {
+          "en": "Build sensory claustrophobia and inescapable dread",
+          "de": "Klaustrophobische Enge und ausweglose Beklemmung aufbauen"
+        }
+      },
+      {
+        "id": "sensory_grotesque",
+        "icon": "👁️",
+        "labels": {
+          "en": "Describe alien biological anomaly through disturbing sensory details",
+          "de": "Fremdartige biologische Anomalie sensorisch verstörend schildern"
+        }
+      },
+      {
+        "id": "paranoia_decay",
+        "icon": "⚠️",
+        "labels": {
+          "en": "Erode interpersonal trust and provoke paranoia",
+          "de": "Vertrauen zwischen den Überlebenden zersetzen und Paranoia schüren"
+        }
+      },
+      {
+        "id": "system_failure",
+        "icon": "🚨",
+        "labels": {
+          "en": "Trigger critical environmental or life support failure",
+          "de": "Kritischen Ausfall von Lebenserhaltung oder Schiffsfunktionen auslösen"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "18_chapter_quarantine_nightmare",
+        "targetChapters": 18,
+        "labels": {
+          "en": "18-Chapter Quarantine Nightmare",
+          "de": "18-Kapitel Quarantäne-Albtraum"
+        },
+        "acts": {
+          "en": [
+            "Act I: Distress Signal & Containment Breach (Ch. 1-4)",
+            "Act II-A: Hunted in the Dark & Spreading Mutation (Ch. 5-9)",
+            "Act II-B: Sabotage & Paranoia Apex (Ch. 10-14)",
+            "Act III: Self-Destruct & Grim Survival (Ch. 15-18)"
+          ],
+          "de": [
+            "Akt I: Notsignal & Quarantänebruch (Kap. 1-4)",
+            "Akt II-A: Gejagt in der Dunkelheit & Mutation (Kap. 5-9)",
+            "Akt II-B: Sabotage & Höhepunkt der Paranoia (Kap. 10-14)",
+            "Akt III: Selbstzerstörung & Düsteres Überleben (Kap. 15-18)"
+          ]
+        }
+      }
+    ]
+  }
+]

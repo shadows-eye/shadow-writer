@@ -29,6 +29,7 @@ const {
   writeDB,
   findProject,
   Project,
+  Genre,
   Template,
   CharacterElement,
   History,
@@ -55,6 +56,7 @@ module.exports = {
   findProject,
   execAsync,
   Project,
+  Genre,
   Template,
   CharacterElement,
   History,
@@ -186,7 +188,7 @@ function extractDriveFolderId(rawInput) {
 }
 
 app.post('/api/projects', async (req, res) => {
-  const { id, name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description } = req.body;
+  const { id, name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description, customFilterCategories } = req.body;
   const userId = req.headers['x-user-id'] || '';
   const userEmail = req.headers['x-user-email'] || '';
 
@@ -206,7 +208,8 @@ app.post('/api/projects', async (req, res) => {
       templates: templates || [],
       writingPOV: writingPOV || '',
       writingTense: writingTense || '',
-      genre: genre || 'Science Fiction'
+      genre: genre || 'Science Fiction',
+      customFilterCategories: customFilterCategories || []
     };
     await Project.findOneAndUpdate({ id }, newProject, { upsert: true, new: true });
     res.json({ success: true, project: newProject });
@@ -224,7 +227,7 @@ app.put('/api/projects/:projectId', async (req, res) => {
     const existing = await Project.findOne({ id: projectId }).lean();
     if (!existing) return res.status(404).json({ error: 'Project not found' });
 
-    const { name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description } = req.body || {};
+    const { name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description, customFilterCategories } = req.body || {};
     const nextFolderPath = folderPath !== undefined ? folderPath : (existing.folderPath || '');
     const resolvedFolderId = googleDriveFolderId !== undefined
       ? (googleDriveFolderId || extractDriveFolderId(nextFolderPath))
@@ -241,6 +244,10 @@ app.put('/api/projects/:projectId', async (req, res) => {
       writingTense: writingTense !== undefined ? writingTense : (existing.writingTense || ''),
       genre: genre !== undefined ? genre : (existing.genre || 'Science Fiction')
     };
+
+    if (customFilterCategories !== undefined) {
+      updateFields.customFilterCategories = customFilterCategories;
+    }
 
     const updated = await Project.findOneAndUpdate({ id: projectId }, { $set: updateFields }, { new: true }).lean();
     res.json({ success: true, project: updated });
@@ -278,6 +285,177 @@ app.delete('/api/projects/:projectId', async (req, res) => {
   } catch (error) {
     console.error('Error deleting project:', error);
     res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
+// --- GENRES API ---
+function escapeRegex(string) {
+  return String(string || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mergeFilterCategories(baseCats, customCats) {
+  if (!Array.isArray(customCats) || customCats.length === 0) {
+    return Array.isArray(baseCats) ? baseCats : [];
+  }
+  const customMap = new Map();
+  for (const c of customCats) {
+    if (c && c.id) customMap.set(c.id, c);
+  }
+  const merged = [];
+  const baseList = Array.isArray(baseCats) ? baseCats : [];
+  for (const b of baseList) {
+    if (b && b.id && customMap.has(b.id)) {
+      const custom = customMap.get(b.id);
+      merged.push({
+        ...b,
+        ...custom,
+        labels: { ...(b.labels || {}), ...(custom.labels || {}) }
+      });
+    } else {
+      merged.push(b);
+    }
+  }
+  for (const c of customCats) {
+    if (c && c.id && !merged.some(m => m.id === c.id)) {
+      merged.push(c);
+    }
+  }
+  return merged;
+}
+
+app.get('/api/genres', async (req, res) => {
+  try {
+    const { genre, projectId } = req.query;
+    let targetGenre = genre;
+    let project = null;
+
+    if (projectId) {
+      project = await Project.findOne({ id: projectId }).lean();
+      if (!targetGenre && project && project.genre) {
+        targetGenre = project.genre;
+      }
+    }
+
+    if (!targetGenre && projectId) {
+      targetGenre = 'science_fiction';
+    }
+
+    if (targetGenre) {
+      const escaped = escapeRegex(targetGenre);
+      const matched = await Genre.findOne({
+        $or: [
+          { id: new RegExp('^' + escaped + '$', 'i') },
+          { name: new RegExp('^' + escaped + '$', 'i') },
+          { id: new RegExp('^' + escapeRegex(targetGenre.replace(/ /g, '_')) + '$', 'i') },
+          { name: new RegExp('^' + escapeRegex(targetGenre.replace(/_/g, ' ')) + '$', 'i') }
+        ]
+      }).lean();
+
+      if (matched) {
+        if (project && Array.isArray(project.customFilterCategories) && project.customFilterCategories.length > 0) {
+          matched.filterCategories = mergeFilterCategories(matched.filterCategories, project.customFilterCategories);
+        }
+        return res.json({ success: true, genre: matched, genres: [matched] });
+      }
+    }
+
+    const allGenres = await Genre.find({}).lean();
+    res.json({ success: true, genres: allGenres });
+  } catch (e) {
+    console.error('Error fetching genres:', e);
+    res.status(500).json({ error: 'Failed to fetch genres' });
+  }
+});
+
+app.get('/api/genres/:genreId', async (req, res) => {
+  try {
+    const { genreId } = req.params;
+    const { projectId } = req.query;
+    if (!genreId) return res.status(400).json({ error: 'Missing genreId' });
+
+    const escaped = escapeRegex(genreId);
+    const genre = await Genre.findOne({
+      $or: [
+        { id: new RegExp('^' + escaped + '$', 'i') },
+        { name: new RegExp('^' + escaped + '$', 'i') },
+        { id: new RegExp('^' + escapeRegex(genreId.replace(/ /g, '_')) + '$', 'i') },
+        { name: new RegExp('^' + escapeRegex(genreId.replace(/_/g, ' ')) + '$', 'i') }
+      ]
+    }).lean();
+
+    if (!genre) {
+      return res.status(404).json({ error: 'Genre not found' });
+    }
+
+    if (projectId) {
+      const project = await Project.findOne({ id: projectId }).lean();
+      if (project && Array.isArray(project.customFilterCategories) && project.customFilterCategories.length > 0) {
+        genre.filterCategories = mergeFilterCategories(genre.filterCategories, project.customFilterCategories);
+      }
+    }
+
+    res.json({ success: true, genre });
+  } catch (e) {
+    console.error('Error fetching genre:', e);
+    res.status(500).json({ error: 'Failed to fetch genre' });
+  }
+});
+
+app.post('/api/genres', async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data || !data.id || !data.name) {
+      return res.status(400).json({ error: 'Missing required fields: id and name are required' });
+    }
+
+    const genre = await Genre.findOneAndUpdate(
+      { id: data.id },
+      { $set: data },
+      { upsert: true, new: true }
+    ).lean();
+
+    res.json({ success: true, genre });
+  } catch (e) {
+    console.error('Error creating genre:', e);
+    res.status(500).json({ error: 'Failed to create genre' });
+  }
+});
+
+app.put('/api/genres/:genreId', async (req, res) => {
+  try {
+    const { genreId } = req.params;
+    if (!genreId) return res.status(400).json({ error: 'Missing genreId' });
+
+    const escaped = escapeRegex(genreId);
+    const existing = await Genre.findOne({
+      $or: [
+        { id: new RegExp('^' + escaped + '$', 'i') },
+        { name: new RegExp('^' + escaped + '$', 'i') },
+        { id: new RegExp('^' + escapeRegex(genreId.replace(/ /g, '_')) + '$', 'i') },
+        { name: new RegExp('^' + escapeRegex(genreId.replace(/_/g, ' ')) + '$', 'i') }
+      ]
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Genre not found' });
+    }
+
+    const updateFields = {};
+    const allowed = ['name', 'labels', 'filterCategories', 'sceneTypes', 'characterArchetypes', 'chapterDirectives', 'outlinePresets'];
+    allowed.forEach(k => {
+      if (req.body[k] !== undefined) updateFields[k] = req.body[k];
+    });
+
+    const updated = await Genre.findOneAndUpdate(
+      { _id: existing._id },
+      { $set: updateFields },
+      { new: true }
+    ).lean();
+
+    res.json({ success: true, genre: updated });
+  } catch (e) {
+    console.error('Error updating genre:', e);
+    res.status(500).json({ error: 'Failed to update genre' });
   }
 });
 
@@ -785,7 +963,38 @@ app.delete('/api/jobs/:jobId', async (req, res) => {
 // --- CHARACTERS API ---
 app.get('/api/character-elements', async (req, res) => {
   try {
-    const elements = await CharacterElement.find({});
+    const { entityType, genre, lang } = req.query;
+    let filter = {};
+    if (entityType && entityType !== 'all') {
+      filter.entityType = { $in: [entityType, 'all'] };
+    }
+    let elements = await CharacterElement.find(filter).lean();
+
+    if (genre && genre !== 'All') {
+      const gNorm = String(genre).toLowerCase().trim().replace(/_/g, ' ');
+      elements = elements.filter(el => {
+        if (!el.genres || !Array.isArray(el.genres) || el.genres.length === 0) return true;
+        return el.genres.some(g => {
+          const gn = String(g).toLowerCase().trim().replace(/_/g, ' ');
+          return gn === 'all' || gn === gNorm;
+        });
+      });
+    }
+
+    if (lang) {
+      const isDe = String(lang).toLowerCase().startsWith('de');
+      const l = isDe ? 'de' : 'en';
+      elements = elements.map(el => {
+        const localizedName = (el.labels && el.labels[l])
+          ? el.labels[l]
+          : ((el.labels && el.labels.en) ? el.labels.en : el.name);
+        return {
+          ...el,
+          name: localizedName
+        };
+      });
+    }
+
     res.json({ elements });
   } catch (e) {
     console.error('Error fetching character elements:', e);
@@ -806,6 +1015,8 @@ app.post('/api/character-elements', async (req, res) => {
       element.type = newElement.type || element.type;
       element.color = newElement.color !== undefined ? newElement.color : element.color;
       element.isTag = newElement.isTag !== undefined ? newElement.isTag : element.isTag;
+      if (newElement.genres !== undefined) element.genres = newElement.genres;
+      if (newElement.labels !== undefined) element.labels = newElement.labels;
       await element.save();
     } else {
       element = await CharacterElement.create(newElement);
