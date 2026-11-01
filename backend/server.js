@@ -19,7 +19,7 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 4000;
 
@@ -111,15 +111,19 @@ app.get('/api/project-status', async (req, res) => {
 
     let chapters = [];
     if (hasOutline) {
-      const outlineContent = (outlineNote ? outlineNote.content : (outlineFile ? outlineFile.content : '')) || '';
-      const chapterRegex = /^\s*#+\s*Chapter\s+(\d+)/gm;
+      const outlineUnstruct = outlineNote && outlineNote.attributes
+        ? (typeof outlineNote.attributes.get === 'function' ? outlineNote.attributes.get('unstructured') : outlineNote.attributes.unstructured)
+        : '';
+      const outlineContent = (outlineNote ? (outlineNote.content || outlineUnstruct) : (outlineFile ? outlineFile.content : '')) || '';
+      const chapterRegex = /^\s*#*\s*(?:Chapter|Kapitel|Band)\s+(\d+)/gmi;
       let match;
       const chaptersSet = new Set();
       while ((match = chapterRegex.exec(outlineContent)) !== null) {
         chaptersSet.add(parseInt(match[1]));
       }
       chapters = Array.from(chaptersSet).sort((a, b) => a - b);
-    } else {
+    }
+    if (chapters.length === 0) {
       const chaps = await Chapter.find({ projectId: project.id });
       chapters = chaps.map(c => {
         const num = parseInt(c.id.replace(/\D/g, ''));
@@ -167,30 +171,80 @@ app.get('/api/projects', async (req, res) => {
   res.json({ projects: await Project.find(query).lean() });
 });
 
+function extractDriveFolderId(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return '';
+  const trimmed = rawInput.trim();
+  if (!trimmed) return '';
+  const folderMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return folderMatch[1];
+  const idParamMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParamMatch) return idParamMatch[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+  return '';
+}
+
 app.post('/api/projects', async (req, res) => {
-  const { id, name, folderPath, templates, writingPOV, writingTense, genre } = req.body;
+  const { id, name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description } = req.body;
   const userId = req.headers['x-user-id'] || '';
   const userEmail = req.headers['x-user-email'] || '';
 
   if (!id || !name) return res.status(400).json({ error: 'Missing fields: id and name are required' });
 
   try {
+    const resolvedFolderId = googleDriveFolderId || extractDriveFolderId(folderPath || '');
     const newProject = {
       id,
       name,
       userId,
       userEmail,
-      folderPath: folderPath || '',
+      folderPath: folderPath || resolvedFolderId || '',
+      googleDriveFolderId: resolvedFolderId,
+      language: language || 'en',
+      description: description || '',
       templates: templates || [],
       writingPOV: writingPOV || '',
       writingTense: writingTense || '',
       genre: genre || 'Science Fiction'
     };
-    await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
+    await Project.findOneAndUpdate({ id }, newProject, { upsert: true, new: true });
     res.json({ success: true, project: newProject });
   } catch (error) {
     console.error('Error saving project:', error);
     res.status(500).json({ error: 'Failed to save project' });
+  }
+});
+
+app.put('/api/projects/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
+
+  try {
+    const existing = await Project.findOne({ id: projectId }).lean();
+    if (!existing) return res.status(404).json({ error: 'Project not found' });
+
+    const { name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description } = req.body || {};
+    const nextFolderPath = folderPath !== undefined ? folderPath : (existing.folderPath || '');
+    const resolvedFolderId = googleDriveFolderId !== undefined
+      ? (googleDriveFolderId || extractDriveFolderId(nextFolderPath))
+      : (folderPath !== undefined ? extractDriveFolderId(nextFolderPath) : (existing.googleDriveFolderId || ''));
+
+    const updateFields = {
+      name: name !== undefined ? name : existing.name,
+      folderPath: nextFolderPath,
+      googleDriveFolderId: resolvedFolderId,
+      language: language !== undefined ? language : (existing.language || 'en'),
+      description: description !== undefined ? description : (existing.description || ''),
+      templates: templates !== undefined ? templates : (existing.templates || []),
+      writingPOV: writingPOV !== undefined ? writingPOV : (existing.writingPOV || ''),
+      writingTense: writingTense !== undefined ? writingTense : (existing.writingTense || ''),
+      genre: genre !== undefined ? genre : (existing.genre || 'Science Fiction')
+    };
+
+    const updated = await Project.findOneAndUpdate({ id: projectId }, { $set: updateFields }, { new: true }).lean();
+    res.json({ success: true, project: updated });
+  } catch (error) {
+    console.error('Error updating project:', error);
+    res.status(500).json({ error: 'Failed to update project' });
   }
 });
 
@@ -787,8 +841,8 @@ app.get('/api/characters/:id', async (req, res) => {
 
 app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, attributes: inputAttrs, projectId } = req.body;
-  if (!content && !inputAttrs) return res.status(400).json({ error: 'Missing content or attributes' });
+  const { name: reqName, content, attributes: inputAttrs, projectId } = req.body;
+  if (!content && !inputAttrs && !reqName) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
@@ -797,10 +851,13 @@ app.post('/api/characters/:id', async (req, res) => {
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
-    if (inputAttrs && Object.keys(inputAttrs).length > 0) {
+    if (!content && inputAttrs && Object.keys(inputAttrs).length > 0) {
       delete parsedAttrs.unstructured;
     }
     const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
+    if (content && cleanContent && !mergedAttrs.unstructured) {
+      mergedAttrs.unstructured = cleanContent;
+    }
 
     console.log(`[DEBUG] Updating character ${id}`);
     console.log(`[DEBUG] Input Attrs:`, inputAttrs);
@@ -809,7 +866,7 @@ app.post('/api/characters/:id', async (req, res) => {
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
     const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
     const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
-    updatedChar.name = extractString((inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id));
+    updatedChar.name = extractString(reqName || (inputAttrs && inputAttrs.name) || (charName !== id ? charName : '') || (existingChar ? existingChar.name : id));
     updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
     updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
@@ -915,10 +972,12 @@ app.post('/api/chapters/:id', async (req, res) => {
     if (content) {
       const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
       if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
-        delete attributes.unstructured;
         const cleanedReqAttrs = { ...req.body.attributes };
         delete cleanedReqAttrs.name;
         Object.assign(attributes, cleanedReqAttrs);
+        if (cleanContent && !attributes.unstructured) {
+          attributes.unstructured = cleanContent;
+        }
         if (req.body.attributes.name) {
           updateData.name = extractString(req.body.attributes.name);
         }
@@ -1056,11 +1115,14 @@ app.post('/api/notes/:id', async (req, res) => {
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
     let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
-    if (reqAttributes && Object.keys(reqAttributes).length > 0) {
+    if (!content && reqAttributes && Object.keys(reqAttributes).length > 0) {
       delete parsedAttrs.unstructured;
     }
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
     const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+    if (content && cleanContent && !mergedAttributes.unstructured) {
+      mergedAttributes.unstructured = cleanContent;
+    }
 
     let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));
     if (!note) {
