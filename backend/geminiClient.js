@@ -87,6 +87,12 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
         if (config.system_instruction) {
           payload.systemInstruction = { parts: [{ text: config.system_instruction }] };
         }
+        if (config.response_mime_type) {
+          payload.generationConfig.responseMimeType = config.response_mime_type;
+        }
+        if (config.temperature !== undefined && config.temperature !== null) {
+          payload.generationConfig.temperature = config.temperature;
+        }
         if (config.thinking_config) {
           payload.generationConfig.thinkingConfig = {
             thinkingBudget: config.thinking_config.thinking_level === 'high' ? 2048 : 1024
@@ -144,6 +150,12 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
       if (config.system_instruction) {
         payload.systemInstruction = { parts: [{ text: config.system_instruction }] };
       }
+      if (config.response_mime_type) {
+        payload.generationConfig.responseMimeType = config.response_mime_type;
+      }
+      if (config.temperature !== undefined && config.temperature !== null) {
+        payload.generationConfig.temperature = config.temperature;
+      }
       if (config.thinking_config) {
         payload.generationConfig.thinkingConfig = {
           thinkingBudget: config.thinking_config.thinking_level === 'high' ? 2048 : 1024
@@ -187,9 +199,19 @@ ${draftContent}
 }
 
 /**
- * Main generateContent function called by agentEngine & subagentEngine.
+ * Main generateContent function called by agentEngine, subagentEngine & Editorial Engine.
  */
-async function generateContent(message, model = null, thinkingLevel = null, isSubagent = false) {
+async function generateContent(messageOrOptions, model = null, thinkingLevel = null, isSubagent = false, options = {}) {
+  let message = messageOrOptions;
+  let opts = options || {};
+  if (messageOrOptions && typeof messageOrOptions === 'object' && !Array.isArray(messageOrOptions)) {
+    message = messageOrOptions.message || messageOrOptions.contents || '';
+    model = messageOrOptions.model || model;
+    thinkingLevel = messageOrOptions.thinkingLevel || thinkingLevel;
+    isSubagent = Boolean(messageOrOptions.isSubagent !== undefined ? messageOrOptions.isSubagent : isSubagent);
+    opts = messageOrOptions;
+  }
+
   let token = null;
   let isVertex = false;
 
@@ -224,11 +246,20 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
 
   // Setup prompt contents
   const contents = [
-    { role: 'user', parts: [{ text: message }] }
+    { role: 'user', parts: [{ text: String(message || '') }] }
   ];
 
   // Setup config
   let config = {};
+  if (opts.systemInstruction || opts.system_instruction) {
+    config.system_instruction = opts.systemInstruction || opts.system_instruction;
+  }
+  if (opts.responseMimeType || opts.response_mime_type) {
+    config.response_mime_type = opts.responseMimeType || opts.response_mime_type;
+  }
+  if (opts.temperature !== undefined && opts.temperature !== null) {
+    config.temperature = opts.temperature;
+  }
   if (thinkingToUse && thinkingToUse.toLowerCase() !== 'none') {
     config.thinking_config = { thinking_level: thinkingToUse.toLowerCase() };
   }
@@ -237,7 +268,7 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
   let outputText = await callGenerateContent(modelToUse, contents, config, token, isVertex);
 
   // Quality gate check for default subagents
-  if (isSubagent && !model) {
+  if (isSubagent && !model && !opts.skipQualityGate) {
     outputText = await runQualityGate(outputText, token, isVertex);
   }
 
