@@ -250,6 +250,37 @@ app.put('/api/projects/:projectId', async (req, res) => {
   }
 });
 
+const PROTECTED_PROJECT_IDS = new Set([
+  'global',
+  'the-beginning-of-the-end',
+  'waldenreuth-band-4'
+]);
+
+app.delete('/api/projects/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
+  if (PROTECTED_PROJECT_IDS.has(String(projectId).trim())) {
+    return res.status(400).json({ error: `Project "${projectId}" is protected and cannot be deleted.` });
+  }
+
+  try {
+    await Promise.all([
+      Project.deleteOne({ id: projectId }),
+      Note.deleteMany({ projectId }),
+      Character.deleteMany({ projectId }),
+      Chapter.deleteMany({ projectId }),
+      Artifact.deleteMany({ projectId }),
+      ContextFile.deleteMany({ projectId }),
+      History.deleteMany({ projectId }),
+      Job.deleteMany({ projectId })
+    ]);
+    res.json({ success: true, deletedProjectId: projectId });
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
 app.get('/api/projects/:projectId/export', async (req, res) => {
   const { projectId } = req.params;
   const projects = await Project.find({}).lean();
