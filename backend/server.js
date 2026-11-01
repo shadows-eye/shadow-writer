@@ -36,6 +36,7 @@ const {
   Chapter,
   Character,
   Note,
+  Artifact,
   ContextFile,
   parseCharacterAttributes,
   getDynamicAttributeKeys
@@ -60,6 +61,7 @@ module.exports = {
   Chapter,
   Character,
   Note,
+  Artifact,
   ContextFile
 };
 
@@ -952,116 +954,317 @@ app.get('/api/chapters', async (req, res) => {
   }
 });
 
-app.post('/api/chapters/:id', async (req, res) => {
-  const { id } = req.params;
-  const { content, projectId, clearPendingDiff } = req.body;
-  if (!content && clearPendingDiff !== true) return res.status(400).json({ error: 'Missing content' });
-  const pId = projectId || 'global';
+function normalizeEditorialHtmlToMarkdown(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return '';
+  let s = rawInput.replace(/\r\n/g, '\n').trim();
+  if (!s) return '';
 
-  try {
-    const match = id.match(/\d+/);
-    const orderIndex = match ? parseInt(match[0]) : 999;
-    const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
+  if (/<div\b|<br\b|<span\b/i.test(s)) {
+    s = s.replace(/<span[^>]*class=["']?[^"'>]*issue-highlight[^"'>]*["']?[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+    s = s.replace(/<div>\s*<br\s*\/?>\s*<\/div>/gi, '\n\n');
+    s = s.replace(/<br\s*\/?>/gi, '\n');
+    s = s.replace(/<\/div>\s*<div[^>]*>/gi, '\n');
+    s = s.replace(/<\/?div[^>]*>/gi, '');
+    s = s.replace(/&nbsp;/gi, ' ')
+         .replace(/&amp;/gi, '&')
+         .replace(/&lt;/gi, '<')
+         .replace(/&gt;/gi, '>')
+         .replace(/&quot;/gi, '"');
+  }
 
-    const updateData = { orderIndex, lastEdited: new Date() };
+  const lines = s.split('\n');
+  const outLines = [];
+  let sceneCount = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sceneMatch = trimmed.match(/^(?:#+\s*)?((?:Scene|Szene)\s*\d+\b.*)$/i);
+    if (sceneMatch) {
+      sceneCount++;
+      if (sceneCount > 1) {
+        outLines.push('\n***\n');
+      }
+      outLines.push(`# ${sceneMatch[1].replace(/^#+\s*/, '').trim()}`);
+    } else {
+      outLines.push(line);
+    }
+  }
+  return outLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 
-    if (req.body.name || (req.body.attributes && req.body.attributes.name)) {
-      updateData.name = extractString(req.body.name || req.body.attributes.name);
+async function upsertChapterRecord(pId, id, { name, content, attributes: reqAttributes, clearPendingDiff } = {}) {
+  const match = String(id).match(/\d+/);
+  const orderIndex = match ? parseInt(match[0]) : 999;
+  const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
+
+  const updateData = { orderIndex, lastEdited: new Date() };
+
+  if (name || (reqAttributes && reqAttributes.name)) {
+    updateData.name = extractString(name || reqAttributes.name);
+  }
+
+  if (content) {
+    const normalizedMd = normalizeEditorialHtmlToMarkdown(content);
+    const { attributes, cleanContent } = sanitizeAndStructureContent(normalizedMd, 'chapter', id);
+    attributes.type = 'chapters';
+    attributes.subtypeTag = 'chapters';
+    if (reqAttributes && Object.keys(reqAttributes).length > 0) {
+      const cleanedReqAttrs = { ...reqAttributes };
+      delete cleanedReqAttrs.name;
+      Object.assign(attributes, cleanedReqAttrs);
+      if (reqAttributes.name && !updateData.name) {
+        updateData.name = extractString(reqAttributes.name);
+      }
+    }
+    if (cleanContent) {
+      attributes.unstructured = cleanContent;
     }
 
-    if (content) {
-      const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
-      if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
-        const cleanedReqAttrs = { ...req.body.attributes };
-        delete cleanedReqAttrs.name;
-        Object.assign(attributes, cleanedReqAttrs);
-        if (cleanContent && !attributes.unstructured) {
-          attributes.unstructured = cleanContent;
+    let scenesData = {};
+    if (cleanContent) {
+      const crypto = require('crypto');
+      const generateId = () => crypto.randomBytes(4).toString('hex');
+
+      const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
+
+      let currentSceneId = `scene-${generateId()}`;
+      let currentSceneText = sceneTokens[0] || '';
+
+      const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
+
+      const parseBeats = (sceneText) => {
+        const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
+        let beats = {};
+        let currentBeatId = `beat-${generateId()}`;
+        let currentBeatText = beatTokens[0] || '';
+
+        if (currentBeatText.trim().length > 0) {
+          beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
         }
-        if (req.body.attributes.name) {
-          updateData.name = extractString(req.body.attributes.name);
+
+        for (let i = 1; i < beatTokens.length; i += 2) {
+          const sep = beatTokens[i];
+          const nextText = beatTokens[i + 1] || '';
+          const idMatch = sep.match(/id=["']([^"']+)["']/i);
+          currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
+
+          if (nextText.trim().length > 0) {
+            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
+          }
+        }
+        return beats;
+      };
+
+      if (currentSceneText.trim().length > 0) {
+        const parsedBeats = parseBeats(currentSceneText);
+        if (Object.keys(parsedBeats).length > 0) {
+          scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
         }
       }
 
-      // Parse scenes and beats
-      let scenesData = {};
-      if (cleanContent) {
-        const crypto = require('crypto');
-        const generateId = () => crypto.randomBytes(4).toString('hex');
+      for (let i = 1; i < sceneTokens.length; i += 2) {
+        const sep = sceneTokens[i];
+        const nextText = sceneTokens[i + 1] || '';
 
-        const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
+        const idMatch = sep.match(/id=["']([^"']+)["']/i);
+        currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
 
-        let currentSceneId = `scene-${generateId()}`;
-        let currentSceneText = sceneTokens[0] || '';
-
-        const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
-
-        const parseBeats = (sceneText) => {
-          const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
-          let beats = {};
-          let currentBeatId = `beat-${generateId()}`;
-          let currentBeatText = beatTokens[0] || '';
-
-          if (currentBeatText.trim().length > 0) {
-            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
-          }
-
-          for (let i = 1; i < beatTokens.length; i += 2) {
-            const sep = beatTokens[i];
-            const nextText = beatTokens[i + 1] || '';
-            const idMatch = sep.match(/id=["']([^"']+)["']/i);
-            currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
-
-            if (nextText.trim().length > 0) {
-              beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
-            }
-          }
-          return beats;
-        };
-
-        if (currentSceneText.trim().length > 0) {
-          const parsedBeats = parseBeats(currentSceneText);
+        if (nextText.trim().length > 0) {
+          const parsedBeats = parseBeats(nextText);
           if (Object.keys(parsedBeats).length > 0) {
             scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
           }
         }
-
-        for (let i = 1; i < sceneTokens.length; i += 2) {
-          const sep = sceneTokens[i];
-          const nextText = sceneTokens[i + 1] || '';
-
-          const idMatch = sep.match(/id=["']([^"']+)["']/i);
-          currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
-
-          if (nextText.trim().length > 0) {
-            const parsedBeats = parseBeats(nextText);
-            if (Object.keys(parsedBeats).length > 0) {
-              scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-            }
-          }
-        }
       }
-
-      updateData.scenes = scenesData;
-      updateData.content = ""; // Clear root content
-      updateData.attributes = attributes;
-    }
-    if (clearPendingDiff) {
-      updateData.pendingDiff = null;
     }
 
-    await Chapter.findOneAndUpdate(
-      { projectId: pId, id },
-      updateData,
-      { upsert: true }
-    );
+    updateData.scenes = scenesData;
+    updateData.content = "";
+    updateData.attributes = attributes;
+  }
 
+  if (clearPendingDiff) {
+    updateData.pendingDiff = null;
+  }
+
+  return await Chapter.findOneAndUpdate(
+    { projectId: pId, id },
+    updateData,
+    { upsert: true, new: true }
+  );
+}
+
+app.post('/api/chapters/:id', async (req, res) => {
+  const { id } = req.params;
+  const { content, projectId, clearPendingDiff, name, attributes } = req.body;
+  if (!content && clearPendingDiff !== true) return res.status(400).json({ error: 'Missing content' });
+  const pId = projectId || 'global';
+
+  try {
+    await upsertChapterRecord(pId, id, { name, content, attributes, clearPendingDiff });
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving chapter:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// --- EDITORIAL SESSION API ---
+app.get('/api/editor/session/:projectId/:chapterId', async (req, res) => {
+  const { projectId, chapterId } = req.params;
+  const pId = projectId || 'global';
+  const sessionId = chapterId.startsWith('editorial-session-')
+    ? chapterId
+    : `editorial-session-${chapterId}`;
+  const cleanChapterId = chapterId.replace(/^editorial-session-/, '');
+
+  try {
+    const { sanitizeAttributesObj } = require('./mongoDB');
+    const artifact = await Artifact.findOne({ projectId: pId, id: sessionId });
+    const chapter = await Chapter.findOne({ projectId: pId, id: cleanChapterId });
+
+    if (!artifact && !chapter) {
+      return res.status(404).json({ error: 'Editorial session not found' });
+    }
+
+    const artAttrs = artifact ? sanitizeAttributesObj(artifact.attributes) : {};
+    const chapAttrs = chapter ? sanitizeAttributesObj(chapter.attributes) : {};
+
+    const content = (artifact && artifact.content)
+      || artAttrs.unstructured
+      || (chapter && chapter.content)
+      || chapAttrs.unstructured
+      || '';
+    const title = (artifact && artifact.name)
+      || artAttrs.title
+      || (chapter && chapter.name)
+      || cleanChapterId;
+    const currentPhase = artAttrs.currentPhase || artAttrs.current_step || '1. Logik';
+    const suggestions = Array.isArray(artAttrs.suggestions) ? artAttrs.suggestions : [];
+    const stats = artAttrs.stats && typeof artAttrs.stats === 'object'
+      ? {
+          total: Number(artAttrs.stats.total || 0),
+          accepted: Number(artAttrs.stats.accepted || 0),
+          rejected: Number(artAttrs.stats.rejected || 0),
+          open: Number(artAttrs.stats.open !== undefined ? artAttrs.stats.open : (Number(artAttrs.stats.total || 0) - Number(artAttrs.stats.accepted || 0) - Number(artAttrs.stats.rejected || 0)))
+        }
+      : { total: suggestions.length, accepted: 0, rejected: 0, open: suggestions.length };
+
+    res.json({
+      id: sessionId,
+      projectId: pId,
+      chapterId: cleanChapterId,
+      title,
+      type: 'editorial_session',
+      content,
+      currentPhase,
+      suggestions,
+      stats,
+      attributes: artAttrs,
+      lastEdited: artifact ? artifact.lastEdited : (chapter ? chapter.lastEdited : new Date())
+    });
+  } catch (err) {
+    console.error('Error loading editorial session:', err);
+    res.status(500).json({ error: 'Failed to load editorial session' });
+  }
+});
+
+const saveEditorialSessionHandler = async (req, res) => {
+  const { projectId, chapterId } = req.params;
+  const pId = projectId || 'global';
+  const cleanChapterId = chapterId.replace(/^editorial-session-/, '');
+  const sessionId = `editorial-session-${cleanChapterId}`;
+
+  try {
+    const { sanitizeAttributesObj } = require('./mongoDB');
+    const existing = await Artifact.findOne({ projectId: pId, id: sessionId });
+    const existingAttrs = existing ? sanitizeAttributesObj(existing.attributes) : {};
+
+    const body = req.body || {};
+    const rawContent = body.content !== undefined
+      ? body.content
+      : (body.current_text !== undefined ? body.current_text : (existing ? existing.content : ''));
+    const cleanMd = normalizeEditorialHtmlToMarkdown(rawContent);
+
+    const title = body.title || body.name || existingAttrs.title || (existing && existing.name) || cleanChapterId;
+    const currentPhase = body.currentPhase || body.current_step || existingAttrs.currentPhase || '1. Logik';
+    const suggestions = Array.isArray(body.suggestions)
+      ? body.suggestions
+      : (Array.isArray(existingAttrs.suggestions) ? existingAttrs.suggestions : []);
+
+    const rawStats = body.stats || existingAttrs.stats || { total: suggestions.length, accepted: 0, rejected: 0, open: suggestions.length };
+    const total = Number(rawStats.total !== undefined ? rawStats.total : suggestions.length);
+    const accepted = Number(rawStats.accepted || 0);
+    const rejected = Number(rawStats.rejected || 0);
+    const open = Number(rawStats.open !== undefined ? rawStats.open : Math.max(0, total - accepted - rejected));
+    const stats = { total, accepted, rejected, open };
+
+    const mergedAttrs = {
+      ...existingAttrs,
+      ...(body.attributes || {}),
+      type: 'editorial_session',
+      subtypeTag: 'editorial_session',
+      chapterId: cleanChapterId,
+      title,
+      currentPhase,
+      suggestions,
+      stats,
+      unstructured: cleanMd
+    };
+    if (body.current_text && /<div\b|<span\b/i.test(body.current_text)) {
+      mergedAttrs.legacyRawHtml = body.current_text;
+    }
+
+    const savedArtifact = await Artifact.findOneAndUpdate(
+      { projectId: pId, id: sessionId },
+      {
+        $set: {
+          projectId: pId,
+          id: sessionId,
+          name: title,
+          type: 'editorial_session',
+          content: cleanMd,
+          attributes: mergedAttrs,
+          lastEdited: new Date()
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    if (cleanMd && body.syncChapter !== false) {
+      await upsertChapterRecord(pId, cleanChapterId, {
+        name: title,
+        content: cleanMd,
+        attributes: {
+          type: 'chapters',
+          subtypeTag: 'chapters',
+          editorialPhase: currentPhase
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      session: {
+        id: sessionId,
+        projectId: pId,
+        chapterId: cleanChapterId,
+        title,
+        type: 'editorial_session',
+        content: cleanMd,
+        currentPhase,
+        suggestions,
+        stats,
+        lastEdited: savedArtifact.lastEdited
+      }
+    });
+  } catch (err) {
+    console.error('Error saving editorial session:', err);
+    res.status(500).json({ error: 'Failed to save editorial session', details: err.message });
+  }
+};
+
+app.put('/api/editor/session/:projectId/:chapterId', saveEditorialSessionHandler);
+app.post('/api/editor/session/:projectId/:chapterId', saveEditorialSessionHandler);
 
 // --- NOTES API ---
 app.get('/api/notes', async (req, res) => {
