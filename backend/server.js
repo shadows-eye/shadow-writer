@@ -19,7 +19,7 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 4000;
 
@@ -29,6 +29,7 @@ const {
   writeDB,
   findProject,
   Project,
+  Genre,
   Template,
   CharacterElement,
   History,
@@ -36,6 +37,7 @@ const {
   Chapter,
   Character,
   Note,
+  Artifact,
   ContextFile,
   parseCharacterAttributes,
   getDynamicAttributeKeys
@@ -54,12 +56,14 @@ module.exports = {
   findProject,
   execAsync,
   Project,
+  Genre,
   Template,
   CharacterElement,
   History,
   Chapter,
   Character,
   Note,
+  Artifact,
   ContextFile
 };
 
@@ -111,15 +115,19 @@ app.get('/api/project-status', async (req, res) => {
 
     let chapters = [];
     if (hasOutline) {
-      const outlineContent = (outlineNote ? outlineNote.content : (outlineFile ? outlineFile.content : '')) || '';
-      const chapterRegex = /^\s*#+\s*Chapter\s+(\d+)/gm;
+      const outlineUnstruct = outlineNote && outlineNote.attributes
+        ? (typeof outlineNote.attributes.get === 'function' ? outlineNote.attributes.get('unstructured') : outlineNote.attributes.unstructured)
+        : '';
+      const outlineContent = (outlineNote ? (outlineNote.content || outlineUnstruct) : (outlineFile ? outlineFile.content : '')) || '';
+      const chapterRegex = /^\s*#*\s*(?:Chapter|Kapitel|Band)\s+(\d+)/gmi;
       let match;
       const chaptersSet = new Set();
       while ((match = chapterRegex.exec(outlineContent)) !== null) {
         chaptersSet.add(parseInt(match[1]));
       }
       chapters = Array.from(chaptersSet).sort((a, b) => a - b);
-    } else {
+    }
+    if (chapters.length === 0) {
       const chaps = await Chapter.find({ projectId: project.id });
       chapters = chaps.map(c => {
         const num = parseInt(c.id.replace(/\D/g, ''));
@@ -167,30 +175,287 @@ app.get('/api/projects', async (req, res) => {
   res.json({ projects: await Project.find(query).lean() });
 });
 
+function extractDriveFolderId(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return '';
+  const trimmed = rawInput.trim();
+  if (!trimmed) return '';
+  const folderMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return folderMatch[1];
+  const idParamMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParamMatch) return idParamMatch[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+  return '';
+}
+
 app.post('/api/projects', async (req, res) => {
-  const { id, name, folderPath, templates, writingPOV, writingTense, genre } = req.body;
+  const { id, name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description, customFilterCategories } = req.body;
   const userId = req.headers['x-user-id'] || '';
   const userEmail = req.headers['x-user-email'] || '';
 
   if (!id || !name) return res.status(400).json({ error: 'Missing fields: id and name are required' });
 
   try {
+    const resolvedFolderId = googleDriveFolderId || extractDriveFolderId(folderPath || '');
     const newProject = {
       id,
       name,
       userId,
       userEmail,
-      folderPath: folderPath || '',
+      folderPath: folderPath || resolvedFolderId || '',
+      googleDriveFolderId: resolvedFolderId,
+      language: language || 'en',
+      description: description || '',
       templates: templates || [],
       writingPOV: writingPOV || '',
       writingTense: writingTense || '',
-      genre: genre || 'Science Fiction'
+      genre: genre || 'Science Fiction',
+      customFilterCategories: customFilterCategories || []
     };
-    await Project.findOneAndUpdate({ id }, newProject, { upsert: true });
+    await Project.findOneAndUpdate({ id }, newProject, { upsert: true, new: true });
     res.json({ success: true, project: newProject });
   } catch (error) {
     console.error('Error saving project:', error);
     res.status(500).json({ error: 'Failed to save project' });
+  }
+});
+
+app.put('/api/projects/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
+
+  try {
+    const existing = await Project.findOne({ id: projectId }).lean();
+    if (!existing) return res.status(404).json({ error: 'Project not found' });
+
+    const { name, folderPath, googleDriveFolderId, templates, writingPOV, writingTense, genre, language, description, customFilterCategories } = req.body || {};
+    const nextFolderPath = folderPath !== undefined ? folderPath : (existing.folderPath || '');
+    const resolvedFolderId = googleDriveFolderId !== undefined
+      ? (googleDriveFolderId || extractDriveFolderId(nextFolderPath))
+      : (folderPath !== undefined ? extractDriveFolderId(nextFolderPath) : (existing.googleDriveFolderId || ''));
+
+    const updateFields = {
+      name: name !== undefined ? name : existing.name,
+      folderPath: nextFolderPath,
+      googleDriveFolderId: resolvedFolderId,
+      language: language !== undefined ? language : (existing.language || 'en'),
+      description: description !== undefined ? description : (existing.description || ''),
+      templates: templates !== undefined ? templates : (existing.templates || []),
+      writingPOV: writingPOV !== undefined ? writingPOV : (existing.writingPOV || ''),
+      writingTense: writingTense !== undefined ? writingTense : (existing.writingTense || ''),
+      genre: genre !== undefined ? genre : (existing.genre || 'Science Fiction')
+    };
+
+    if (customFilterCategories !== undefined) {
+      updateFields.customFilterCategories = customFilterCategories;
+    }
+
+    const updated = await Project.findOneAndUpdate({ id: projectId }, { $set: updateFields }, { new: true }).lean();
+    res.json({ success: true, project: updated });
+  } catch (error) {
+    console.error('Error updating project:', error);
+    res.status(500).json({ error: 'Failed to update project' });
+  }
+});
+
+const PROTECTED_PROJECT_IDS = new Set([
+  'global',
+  'the-beginning-of-the-end',
+  'waldenreuth-band-4'
+]);
+
+app.delete('/api/projects/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId' });
+  if (PROTECTED_PROJECT_IDS.has(String(projectId).trim())) {
+    return res.status(400).json({ error: `Project "${projectId}" is protected and cannot be deleted.` });
+  }
+
+  try {
+    await Promise.all([
+      Project.deleteOne({ id: projectId }),
+      Note.deleteMany({ projectId }),
+      Character.deleteMany({ projectId }),
+      Chapter.deleteMany({ projectId }),
+      Artifact.deleteMany({ projectId }),
+      ContextFile.deleteMany({ projectId }),
+      History.deleteMany({ projectId }),
+      Job.deleteMany({ projectId })
+    ]);
+    res.json({ success: true, deletedProjectId: projectId });
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
+// --- GENRES API ---
+function escapeRegex(string) {
+  return String(string || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mergeFilterCategories(baseCats, customCats) {
+  if (!Array.isArray(customCats) || customCats.length === 0) {
+    return Array.isArray(baseCats) ? baseCats : [];
+  }
+  const customMap = new Map();
+  for (const c of customCats) {
+    if (c && c.id) customMap.set(c.id, c);
+  }
+  const merged = [];
+  const baseList = Array.isArray(baseCats) ? baseCats : [];
+  for (const b of baseList) {
+    if (b && b.id && customMap.has(b.id)) {
+      const custom = customMap.get(b.id);
+      merged.push({
+        ...b,
+        ...custom,
+        labels: { ...(b.labels || {}), ...(custom.labels || {}) }
+      });
+    } else {
+      merged.push(b);
+    }
+  }
+  for (const c of customCats) {
+    if (c && c.id && !merged.some(m => m.id === c.id)) {
+      merged.push(c);
+    }
+  }
+  return merged;
+}
+
+app.get('/api/genres', async (req, res) => {
+  try {
+    const { genre, projectId } = req.query;
+    let targetGenre = genre;
+    let project = null;
+
+    if (projectId) {
+      project = await Project.findOne({ id: projectId }).lean();
+      if (!targetGenre && project && project.genre) {
+        targetGenre = project.genre;
+      }
+    }
+
+    if (!targetGenre && projectId) {
+      targetGenre = 'science_fiction';
+    }
+
+    if (targetGenre) {
+      const escaped = escapeRegex(targetGenre);
+      const matched = await Genre.findOne({
+        $or: [
+          { id: new RegExp('^' + escaped + '$', 'i') },
+          { name: new RegExp('^' + escaped + '$', 'i') },
+          { id: new RegExp('^' + escapeRegex(targetGenre.replace(/ /g, '_')) + '$', 'i') },
+          { name: new RegExp('^' + escapeRegex(targetGenre.replace(/_/g, ' ')) + '$', 'i') }
+        ]
+      }).lean();
+
+      if (matched) {
+        if (project && Array.isArray(project.customFilterCategories) && project.customFilterCategories.length > 0) {
+          matched.filterCategories = mergeFilterCategories(matched.filterCategories, project.customFilterCategories);
+        }
+        return res.json({ success: true, genre: matched, genres: [matched] });
+      }
+    }
+
+    const allGenres = await Genre.find({}).lean();
+    res.json({ success: true, genres: allGenres });
+  } catch (e) {
+    console.error('Error fetching genres:', e);
+    res.status(500).json({ error: 'Failed to fetch genres' });
+  }
+});
+
+app.get('/api/genres/:genreId', async (req, res) => {
+  try {
+    const { genreId } = req.params;
+    const { projectId } = req.query;
+    if (!genreId) return res.status(400).json({ error: 'Missing genreId' });
+
+    const escaped = escapeRegex(genreId);
+    const genre = await Genre.findOne({
+      $or: [
+        { id: new RegExp('^' + escaped + '$', 'i') },
+        { name: new RegExp('^' + escaped + '$', 'i') },
+        { id: new RegExp('^' + escapeRegex(genreId.replace(/ /g, '_')) + '$', 'i') },
+        { name: new RegExp('^' + escapeRegex(genreId.replace(/_/g, ' ')) + '$', 'i') }
+      ]
+    }).lean();
+
+    if (!genre) {
+      return res.status(404).json({ error: 'Genre not found' });
+    }
+
+    if (projectId) {
+      const project = await Project.findOne({ id: projectId }).lean();
+      if (project && Array.isArray(project.customFilterCategories) && project.customFilterCategories.length > 0) {
+        genre.filterCategories = mergeFilterCategories(genre.filterCategories, project.customFilterCategories);
+      }
+    }
+
+    res.json({ success: true, genre });
+  } catch (e) {
+    console.error('Error fetching genre:', e);
+    res.status(500).json({ error: 'Failed to fetch genre' });
+  }
+});
+
+app.post('/api/genres', async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data || !data.id || !data.name) {
+      return res.status(400).json({ error: 'Missing required fields: id and name are required' });
+    }
+
+    const genre = await Genre.findOneAndUpdate(
+      { id: data.id },
+      { $set: data },
+      { upsert: true, new: true }
+    ).lean();
+
+    res.json({ success: true, genre });
+  } catch (e) {
+    console.error('Error creating genre:', e);
+    res.status(500).json({ error: 'Failed to create genre' });
+  }
+});
+
+app.put('/api/genres/:genreId', async (req, res) => {
+  try {
+    const { genreId } = req.params;
+    if (!genreId) return res.status(400).json({ error: 'Missing genreId' });
+
+    const escaped = escapeRegex(genreId);
+    const existing = await Genre.findOne({
+      $or: [
+        { id: new RegExp('^' + escaped + '$', 'i') },
+        { name: new RegExp('^' + escaped + '$', 'i') },
+        { id: new RegExp('^' + escapeRegex(genreId.replace(/ /g, '_')) + '$', 'i') },
+        { name: new RegExp('^' + escapeRegex(genreId.replace(/_/g, ' ')) + '$', 'i') }
+      ]
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Genre not found' });
+    }
+
+    const updateFields = {};
+    const allowed = ['name', 'labels', 'filterCategories', 'sceneTypes', 'characterArchetypes', 'chapterDirectives', 'outlinePresets'];
+    allowed.forEach(k => {
+      if (req.body[k] !== undefined) updateFields[k] = req.body[k];
+    });
+
+    const updated = await Genre.findOneAndUpdate(
+      { _id: existing._id },
+      { $set: updateFields },
+      { new: true }
+    ).lean();
+
+    res.json({ success: true, genre: updated });
+  } catch (e) {
+    console.error('Error updating genre:', e);
+    res.status(500).json({ error: 'Failed to update genre' });
   }
 });
 
@@ -698,7 +963,38 @@ app.delete('/api/jobs/:jobId', async (req, res) => {
 // --- CHARACTERS API ---
 app.get('/api/character-elements', async (req, res) => {
   try {
-    const elements = await CharacterElement.find({});
+    const { entityType, genre, lang } = req.query;
+    let filter = {};
+    if (entityType && entityType !== 'all') {
+      filter.entityType = { $in: [entityType, 'all'] };
+    }
+    let elements = await CharacterElement.find(filter).lean();
+
+    if (genre && genre !== 'All') {
+      const gNorm = String(genre).toLowerCase().trim().replace(/_/g, ' ');
+      elements = elements.filter(el => {
+        if (!el.genres || !Array.isArray(el.genres) || el.genres.length === 0) return true;
+        return el.genres.some(g => {
+          const gn = String(g).toLowerCase().trim().replace(/_/g, ' ');
+          return gn === 'all' || gn === gNorm;
+        });
+      });
+    }
+
+    if (lang) {
+      const isDe = String(lang).toLowerCase().startsWith('de');
+      const l = isDe ? 'de' : 'en';
+      elements = elements.map(el => {
+        const localizedName = (el.labels && el.labels[l])
+          ? el.labels[l]
+          : ((el.labels && el.labels.en) ? el.labels.en : el.name);
+        return {
+          ...el,
+          name: localizedName
+        };
+      });
+    }
+
     res.json({ elements });
   } catch (e) {
     console.error('Error fetching character elements:', e);
@@ -719,6 +1015,8 @@ app.post('/api/character-elements', async (req, res) => {
       element.type = newElement.type || element.type;
       element.color = newElement.color !== undefined ? newElement.color : element.color;
       element.isTag = newElement.isTag !== undefined ? newElement.isTag : element.isTag;
+      if (newElement.genres !== undefined) element.genres = newElement.genres;
+      if (newElement.labels !== undefined) element.labels = newElement.labels;
       await element.save();
     } else {
       element = await CharacterElement.create(newElement);
@@ -787,8 +1085,8 @@ app.get('/api/characters/:id', async (req, res) => {
 
 app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, attributes: inputAttrs, projectId } = req.body;
-  if (!content && !inputAttrs) return res.status(400).json({ error: 'Missing content or attributes' });
+  const { name: reqName, content, attributes: inputAttrs, projectId } = req.body;
+  if (!content && !inputAttrs && !reqName) return res.status(400).json({ error: 'Missing content or attributes' });
   const pId = projectId || 'global';
 
   try {
@@ -797,10 +1095,13 @@ app.post('/api/characters/:id', async (req, res) => {
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
-    if (inputAttrs && Object.keys(inputAttrs).length > 0) {
+    if (!content && inputAttrs && Object.keys(inputAttrs).length > 0) {
       delete parsedAttrs.unstructured;
     }
     const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
+    if (content && cleanContent && !mergedAttrs.unstructured) {
+      mergedAttrs.unstructured = cleanContent;
+    }
 
     console.log(`[DEBUG] Updating character ${id}`);
     console.log(`[DEBUG] Input Attrs:`, inputAttrs);
@@ -809,7 +1110,7 @@ app.post('/api/characters/:id', async (req, res) => {
     const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
     const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
     const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
-    updatedChar.name = extractString((inputAttrs && inputAttrs.name) || charName || (existingChar ? existingChar.name : id));
+    updatedChar.name = extractString(reqName || (inputAttrs && inputAttrs.name) || (charName !== id ? charName : '') || (existingChar ? existingChar.name : id));
     updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
     updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
@@ -895,114 +1196,29 @@ app.get('/api/chapters', async (req, res) => {
   }
 });
 
+const {
+  router: editorialRouter,
+  upsertChapterRecord,
+  normalizeEditorialHtmlToMarkdown
+} = require('./editorialEngine');
+
 app.post('/api/chapters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId, clearPendingDiff } = req.body;
+  const { content, projectId, clearPendingDiff, name, attributes } = req.body;
   if (!content && clearPendingDiff !== true) return res.status(400).json({ error: 'Missing content' });
   const pId = projectId || 'global';
 
   try {
-    const match = id.match(/\d+/);
-    const orderIndex = match ? parseInt(match[0]) : 999;
-    const { sanitizeAndStructureContent, extractString } = require('./mongoDB');
-
-    const updateData = { orderIndex, lastEdited: new Date() };
-
-    if (req.body.name || (req.body.attributes && req.body.attributes.name)) {
-      updateData.name = extractString(req.body.name || req.body.attributes.name);
-    }
-
-    if (content) {
-      const { attributes, cleanContent } = sanitizeAndStructureContent(content, 'chapter', id);
-      if (req.body.attributes && Object.keys(req.body.attributes).length > 0) {
-        delete attributes.unstructured;
-        const cleanedReqAttrs = { ...req.body.attributes };
-        delete cleanedReqAttrs.name;
-        Object.assign(attributes, cleanedReqAttrs);
-        if (req.body.attributes.name) {
-          updateData.name = extractString(req.body.attributes.name);
-        }
-      }
-
-      // Parse scenes and beats
-      let scenesData = {};
-      if (cleanContent) {
-        const crypto = require('crypto');
-        const generateId = () => crypto.randomBytes(4).toString('hex');
-
-        const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
-
-        let currentSceneId = `scene-${generateId()}`;
-        let currentSceneText = sceneTokens[0] || '';
-
-        const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
-
-        const parseBeats = (sceneText) => {
-          const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
-          let beats = {};
-          let currentBeatId = `beat-${generateId()}`;
-          let currentBeatText = beatTokens[0] || '';
-
-          if (currentBeatText.trim().length > 0) {
-            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
-          }
-
-          for (let i = 1; i < beatTokens.length; i += 2) {
-            const sep = beatTokens[i];
-            const nextText = beatTokens[i + 1] || '';
-            const idMatch = sep.match(/id=["']([^"']+)["']/i);
-            currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
-
-            if (nextText.trim().length > 0) {
-              beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
-            }
-          }
-          return beats;
-        };
-
-        if (currentSceneText.trim().length > 0) {
-          const parsedBeats = parseBeats(currentSceneText);
-          if (Object.keys(parsedBeats).length > 0) {
-            scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-          }
-        }
-
-        for (let i = 1; i < sceneTokens.length; i += 2) {
-          const sep = sceneTokens[i];
-          const nextText = sceneTokens[i + 1] || '';
-
-          const idMatch = sep.match(/id=["']([^"']+)["']/i);
-          currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
-
-          if (nextText.trim().length > 0) {
-            const parsedBeats = parseBeats(nextText);
-            if (Object.keys(parsedBeats).length > 0) {
-              scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-            }
-          }
-        }
-      }
-
-      updateData.scenes = scenesData;
-      updateData.content = ""; // Clear root content
-      updateData.attributes = attributes;
-    }
-    if (clearPendingDiff) {
-      updateData.pendingDiff = null;
-    }
-
-    await Chapter.findOneAndUpdate(
-      { projectId: pId, id },
-      updateData,
-      { upsert: true }
-    );
-
+    await upsertChapterRecord(pId, id, { name, content, attributes, clearPendingDiff });
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving chapter:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// --- EDITORIAL SESSION & ENGINE API ---
+app.use(editorialRouter);
 
 // --- NOTES API ---
 app.get('/api/notes', async (req, res) => {
@@ -1056,11 +1272,14 @@ app.post('/api/notes/:id', async (req, res) => {
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
     let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
-    if (reqAttributes && Object.keys(reqAttributes).length > 0) {
+    if (!content && reqAttributes && Object.keys(reqAttributes).length > 0) {
       delete parsedAttrs.unstructured;
     }
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
     const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+    if (content && cleanContent && !mergedAttributes.unstructured) {
+      mergedAttributes.unstructured = cleanContent;
+    }
 
     let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));
     if (!note) {

@@ -2,6 +2,9 @@ const { GoogleAuth } = require('google-auth-library');
 const fs = require('fs');
 const path = require('path');
 
+const DEFAULT_FLASH_MODEL = process.env.GEMINI_FLASH_MODEL || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const DEFAULT_PRO_MODEL = process.env.GEMINI_PRO_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview';
+
 // Configure Auth Client
 const auth = new GoogleAuth({
   scopes: 'https://www.googleapis.com/auth/cloud-platform'
@@ -57,10 +60,45 @@ async function countTokens(model, message, token, isVertex = false) {
 }
 
 /**
+ * Builds the request payload (contents, safetySettings, systemInstruction, generationConfig)
+ * shared by both Vertex AI and API Key endpoints.
+ */
+function buildGenerateContentPayload(contents, config) {
+  const payload = {
+    contents: contents,
+    safetySettings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+    ]
+  };
+  if (config) {
+    payload.generationConfig = {};
+    if (config.system_instruction) {
+      payload.systemInstruction = { parts: [{ text: config.system_instruction }] };
+    }
+    if (config.response_mime_type) {
+      payload.generationConfig.responseMimeType = config.response_mime_type;
+    }
+    if (config.temperature !== undefined && config.temperature !== null) {
+      payload.generationConfig.temperature = config.temperature;
+    }
+    if (config.thinking_config) {
+      payload.generationConfig.thinkingConfig = {
+        thinkingBudget: config.thinking_config.thinking_level === 'high' ? 2048 : 1024
+      };
+    }
+  }
+  return payload;
+}
+
+/**
  * Call the generateContent API with EU-first -> Global fallback routing.
  */
 async function callGenerateContent(model, contents, config, token, isVertex = false) {
   let headers = { 'Content-Type': 'application/json' };
+  const payload = buildGenerateContentPayload(contents, config);
 
   if (isVertex) {
     const project = process.env.GOOGLE_CLOUD_PROJECT || 'shadowai-497012';
@@ -72,27 +110,6 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
       const host = (loc === 'us' || loc === 'eu') ? `aiplatform.${loc}.rep.googleapis.com` : 'aiplatform.googleapis.com';
       const url = `https://${host}/v1beta1/projects/${project}/locations/${loc}/publishers/google/models/${model}:generateContent`;
       headers['Authorization'] = token;
-
-      let payload = {
-        contents: contents,
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-        ]
-      };
-      if (config) {
-        payload.generationConfig = {};
-        if (config.system_instruction) {
-          payload.systemInstruction = { parts: [{ text: config.system_instruction }] };
-        }
-        if (config.thinking_config) {
-          payload.generationConfig.thinkingConfig = {
-            thinkingBudget: config.thinking_config.thinking_level === 'high' ? 2048 : 1024
-          };
-        }
-      }
 
       try {
         const res = await fetch(url, {
@@ -130,27 +147,6 @@ async function callGenerateContent(model, contents, config, token, isVertex = fa
     const url = `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}:generateContent`;
     headers['x-goog-api-key'] = apiKey;
 
-    let payload = {
-      contents: contents,
-      safetySettings: [
-        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-      ]
-    };
-    if (config) {
-      payload.generationConfig = {};
-      if (config.system_instruction) {
-        payload.systemInstruction = { parts: [{ text: config.system_instruction }] };
-      }
-      if (config.thinking_config) {
-        payload.generationConfig.thinkingConfig = {
-          thinkingBudget: config.thinking_config.thinking_level === 'high' ? 2048 : 1024
-        };
-      }
-    }
-
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
     if (!res.ok) {
       const errText = await res.text();
@@ -178,7 +174,7 @@ ${draftContent}
   `;
 
   try {
-    const response = await callGenerateContent("gemini-3.1-pro-preview", [{ role: 'user', parts: [{ text: qualityPrompt }] }], { thinking_config: { thinking_level: 'high' } }, token, isVertex);
+    const response = await callGenerateContent(DEFAULT_PRO_MODEL, [{ role: 'user', parts: [{ text: qualityPrompt }] }], { thinking_config: { thinking_level: 'high' } }, token, isVertex);
     return response || draftContent;
   } catch (err) {
     console.warn("Quality gate run failed. Returning original draft:", err);
@@ -187,9 +183,19 @@ ${draftContent}
 }
 
 /**
- * Main generateContent function called by agentEngine & subagentEngine.
+ * Main generateContent function called by agentEngine, subagentEngine & Editorial Engine.
  */
-async function generateContent(message, model = null, thinkingLevel = null, isSubagent = false) {
+async function generateContent(messageOrOptions, model = null, thinkingLevel = null, isSubagent = false, options = {}) {
+  let message = messageOrOptions;
+  let opts = options || {};
+  if (messageOrOptions && typeof messageOrOptions === 'object' && !Array.isArray(messageOrOptions)) {
+    message = messageOrOptions.message || messageOrOptions.contents || '';
+    model = messageOrOptions.model || model;
+    thinkingLevel = messageOrOptions.thinkingLevel || thinkingLevel;
+    isSubagent = Boolean(messageOrOptions.isSubagent !== undefined ? messageOrOptions.isSubagent : isSubagent);
+    opts = messageOrOptions;
+  }
+
   let token = null;
   let isVertex = false;
 
@@ -201,7 +207,7 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
     isVertex = false;
   }
 
-  let modelToUse = model || (isSubagent ? "gemini-3.6-flash" : "gemini-3.6-flash");
+  let modelToUse = model || DEFAULT_FLASH_MODEL;
   let thinkingToUse = thinkingLevel || (isSubagent ? "low" : "high");
 
   // Pre-flight Token Count & Dynamic Routing
@@ -209,14 +215,14 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
     const totalTokens = await countTokens(modelToUse, message, token, isVertex);
     console.log(`Pre-flight token count: model=${modelToUse}, total_tokens=${totalTokens}`);
 
-    if (modelToUse === "gemini-3.6-flash" && totalTokens > 60000) {
-      console.log(`Tokens ${totalTokens} exceed gemini-3.6-flash sweet spot. Upgrading to gemini-3.6-flash.`);
-      modelToUse = "gemini-3.6-flash";
+    if (modelToUse === DEFAULT_FLASH_MODEL && totalTokens > 60000) {
+      console.log(`Tokens ${totalTokens} exceed ${DEFAULT_FLASH_MODEL} sweet spot. Upgrading to ${DEFAULT_FLASH_MODEL}.`);
+      modelToUse = DEFAULT_FLASH_MODEL;
     }
 
-    if (modelToUse === "gemini-3.6-flash" && totalTokens > 100000) {
-      console.log(`Tokens ${totalTokens} exceed gemini-3.6-flash sweet spot. Upgrading to gemini-3.1-pro-preview.`);
-      modelToUse = "gemini-3.1-pro-preview";
+    if (modelToUse === DEFAULT_FLASH_MODEL && totalTokens > 100000) {
+      console.log(`Tokens ${totalTokens} exceed ${DEFAULT_FLASH_MODEL} sweet spot. Upgrading to ${DEFAULT_PRO_MODEL}.`);
+      modelToUse = DEFAULT_PRO_MODEL;
     }
   } catch (err) {
     console.error("Error in token counting or dynamic routing:", err);
@@ -224,11 +230,20 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
 
   // Setup prompt contents
   const contents = [
-    { role: 'user', parts: [{ text: message }] }
+    { role: 'user', parts: [{ text: String(message || '') }] }
   ];
 
   // Setup config
   let config = {};
+  if (opts.systemInstruction || opts.system_instruction) {
+    config.system_instruction = opts.systemInstruction || opts.system_instruction;
+  }
+  if (opts.responseMimeType || opts.response_mime_type) {
+    config.response_mime_type = opts.responseMimeType || opts.response_mime_type;
+  }
+  if (opts.temperature !== undefined && opts.temperature !== null) {
+    config.temperature = opts.temperature;
+  }
   if (thinkingToUse && thinkingToUse.toLowerCase() !== 'none') {
     config.thinking_config = { thinking_level: thinkingToUse.toLowerCase() };
   }
@@ -237,7 +252,7 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
   let outputText = await callGenerateContent(modelToUse, contents, config, token, isVertex);
 
   // Quality gate check for default subagents
-  if (isSubagent && !model) {
+  if (isSubagent && !model && !opts.skipQualityGate) {
     outputText = await runQualityGate(outputText, token, isVertex);
   }
 
@@ -245,5 +260,7 @@ async function generateContent(message, model = null, thinkingLevel = null, isSu
 }
 
 module.exports = {
-  generateContent
+  generateContent,
+  DEFAULT_FLASH_MODEL,
+  DEFAULT_PRO_MODEL
 };

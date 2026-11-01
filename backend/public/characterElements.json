@@ -1,12 +1,17 @@
 [
   {
     "id": "race",
-    "name": "Race",
+    "name": "Species / Race",
     "type": "string",
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Race**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Species / Race",
+      "de": "Spezies / Volk"
+    },
+    "genres": ["Science Fiction", "Fantasy", "Sci-Fi Horror"]
   },
   {
     "id": "age",
@@ -15,7 +20,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Age**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Age",
+      "de": "Alter"
+    },
+    "genres": ["All"]
   },
   {
     "id": "rank",
@@ -24,7 +34,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Rank**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Rank",
+      "de": "Rang"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror"]
   },
   {
     "id": "clearance",
@@ -33,7 +48,54 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Clearance**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Clearance",
+      "de": "Sicherheitsfreigabe"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror"]
+  },
+  {
+    "id": "role_occupation",
+    "name": "Role & Occupation",
+    "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "- **Role / Occupation**: ",
+    "suffix": "\n",
+    "labels": {
+      "en": "Role & Occupation",
+      "de": "Beruf & Rolle"
+    },
+    "genres": ["Romantic Suspense", "Romance"]
+  },
+  {
+    "id": "social_circle",
+    "name": "Social Circle & Family",
+    "type": "string",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "- **Social Circle**: ",
+    "suffix": "\n",
+    "labels": {
+      "en": "Social Circle & Family",
+      "de": "Umfeld & Zugehörigkeit"
+    },
+    "genres": ["Romantic Suspense", "Romance"]
+  },
+  {
+    "id": "secret_wound",
+    "name": "Secret & Inner Wound",
+    "type": "textarea",
+    "entityType": "characters",
+    "isDefault": true,
+    "prefix": "\n## Secret & Inner Wound\n",
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Secret & Inner Wound",
+      "de": "Geheimnis & Innere Wunde"
+    },
+    "genres": ["Romantic Suspense", "Romance"]
   },
   {
     "id": "traits",
@@ -42,7 +104,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "- **Traits**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Traits",
+      "de": "Charakterzüge"
+    },
+    "genres": ["All"]
   },
   {
     "id": "physical_desc",
@@ -51,7 +118,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "\n## Physical Description\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Physical Description",
+      "de": "Physische Beschreibung"
+    },
+    "genres": ["All"]
   },
   {
     "id": "background",
@@ -60,7 +132,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "\n## Background & Role\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Background & Role",
+      "de": "Hintergrund & Rolle"
+    },
+    "genres": ["All"]
   },
   {
     "id": "conflict",
@@ -69,7 +146,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "\n## Conflict\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Conflict",
+      "de": "Konflikt"
+    },
+    "genres": ["All"]
   },
   {
     "id": "key_relationships",
@@ -78,7 +160,12 @@
     "entityType": "characters",
     "isDefault": true,
     "prefix": "\n## Key Relationships\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Key Relationships",
+      "de": "Wichtigste Beziehungen"
+    },
+    "genres": ["All"]
   },
   {
     "id": "classification",
@@ -87,7 +174,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "- **Classification**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Tech Classification",
+      "de": "Klassifikation"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror", "Fantasy"]
   },
   {
     "id": "origin",
@@ -96,7 +188,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "- **Origin**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Origin / Creator",
+      "de": "Herkunft / Schöpfer"
+    },
+    "genres": ["All"]
   },
   {
     "id": "energy_source",
@@ -105,7 +202,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "- **Energy Source**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Power / Energy Source",
+      "de": "Energiequelle"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror"]
   },
   {
     "id": "capabilities",
@@ -114,7 +216,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "\n## Capabilities & Weaponry\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Capabilities & Weaponry",
+      "de": "Fähigkeiten & Ausrüstung"
+    },
+    "genres": ["All"]
   },
   {
     "id": "vulnerabilities",
@@ -123,7 +230,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "\n## Vulnerabilities & Limits\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Vulnerabilities & Limits",
+      "de": "Schwachstellen & Grenzen"
+    },
+    "genres": ["All"]
   },
   {
     "id": "historical_impact",
@@ -132,7 +244,12 @@
     "entityType": "technology",
     "isDefault": true,
     "prefix": "\n## Historical Impact\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Historical Impact",
+      "de": "Historische Bedeutung"
+    },
+    "genres": ["All"]
   },
   {
     "id": "faction_name",
@@ -141,7 +258,12 @@
     "entityType": "races",
     "isDefault": true,
     "prefix": "- **Faction Name**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Faction / Species Name",
+      "de": "Fraktions- / Speziesname"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror", "Fantasy"]
   },
   {
     "id": "homeworld",
@@ -150,7 +272,12 @@
     "entityType": "races",
     "isDefault": true,
     "prefix": "- **Homeworld**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Homeworld",
+      "de": "Heimatwelt"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror"]
   },
   {
     "id": "governance",
@@ -159,7 +286,12 @@
     "entityType": "races",
     "isDefault": true,
     "prefix": "- **Governance**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Governance",
+      "de": "Herrschaftsform"
+    },
+    "genres": ["All"]
   },
   {
     "id": "culture",
@@ -168,7 +300,12 @@
     "entityType": "races",
     "isDefault": true,
     "prefix": "\n## Culture & Ideology\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Culture & Ideology",
+      "de": "Kultur & Ideologie"
+    },
+    "genres": ["All"]
   },
   {
     "id": "military",
@@ -177,7 +314,12 @@
     "entityType": "races",
     "isDefault": true,
     "prefix": "\n## Military Assets\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Military Assets",
+      "de": "Militärische Mittel"
+    },
+    "genres": ["All"]
   },
   {
     "id": "system_name",
@@ -186,7 +328,26 @@
     "entityType": "locations",
     "isDefault": true,
     "prefix": "- **System Name**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Sector / Star System",
+      "de": "Sektor / Sternensystem"
+    },
+    "genres": ["Science Fiction", "Sci-Fi Horror"]
+  },
+  {
+    "id": "region_setting",
+    "name": "Region / Setting",
+    "type": "string",
+    "entityType": "locations",
+    "isDefault": true,
+    "prefix": "- **Region**: ",
+    "suffix": "\n",
+    "labels": {
+      "en": "Region / Setting",
+      "de": "Region / Schauplatz"
+    },
+    "genres": ["Romantic Suspense", "Romance", "Fantasy"]
   },
   {
     "id": "climate",
@@ -195,7 +356,12 @@
     "entityType": "locations",
     "isDefault": true,
     "prefix": "- **Climate**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Environment / Climate",
+      "de": "Umwelt & Klima"
+    },
+    "genres": ["All"]
   },
   {
     "id": "strategic_value",
@@ -204,7 +370,12 @@
     "entityType": "locations",
     "isDefault": true,
     "prefix": "\n## Strategic Value\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Strategic Value",
+      "de": "Strategische Bedeutung"
+    },
+    "genres": ["All"]
   },
   {
     "id": "landmarks",
@@ -213,7 +384,12 @@
     "entityType": "locations",
     "isDefault": true,
     "prefix": "\n## Landmarks & Outposts\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Landmarks & Outposts",
+      "de": "Wahrzeichen & Posten"
+    },
+    "genres": ["All"]
   },
   {
     "id": "history",
@@ -222,7 +398,12 @@
     "entityType": "locations",
     "isDefault": true,
     "prefix": "\n## Historical Events\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Historical Events",
+      "de": "Historische Ereignisse"
+    },
+    "genres": ["All"]
   },
   {
     "id": "chapter_content",
@@ -231,7 +412,12 @@
     "entityType": "chapters",
     "isDefault": true,
     "prefix": "\n",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Chapter Content / Prose",
+      "de": "Kapiteltext"
+    },
+    "genres": ["All"]
   },
   {
     "id": "category",
@@ -240,7 +426,12 @@
     "entityType": "notes",
     "isDefault": true,
     "prefix": "- **Category**: ",
-    "suffix": "\n"
+    "suffix": "\n",
+    "labels": {
+      "en": "Note Category / Topic",
+      "de": "Kategorie / Thema"
+    },
+    "genres": ["All"]
   },
   {
     "id": "summary",
@@ -249,7 +440,12 @@
     "entityType": "notes",
     "isDefault": true,
     "prefix": "\n## Summary\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Summary / Outline",
+      "de": "Zusammenfassung"
+    },
+    "genres": ["All"]
   },
   {
     "id": "description",
@@ -258,6 +454,11 @@
     "entityType": "all",
     "isDefault": true,
     "prefix": "\n## Description & Notes\n",
-    "suffix": "\n\n---\n"
+    "suffix": "\n\n---\n",
+    "labels": {
+      "en": "Description & Notes",
+      "de": "Beschreibung & Notizen"
+    },
+    "genres": ["All"]
   }
 ]
