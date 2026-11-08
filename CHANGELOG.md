@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.3] - 2026-11-08
+
+### Added
+- **Helix Discord Voice, STT & WebSocket Engine (`backend/helixEngine.js`, `Dockerfile`, `backend/package.json`)**:
+  - Added real-time WebSocket bridge (`/helix/ws`) with `MCP_API_KEY` authentication for Foundry VTT and Flask internal proxy connections (`join_channel`, `leave_channel`, `start_recording`, `stop_recording`, `session_marker`, `update_player_mapping`).
+  - Integrated Discord voice capture (`discord.js`, `@discordjs/voice`, `prism-media`, `opusscript`, `libsodium-wrappers`, `ffmpeg`) and streaming Google Cloud Speech-to-Text (`@google-cloud/speech`) with speaker diarization mapped to Foundry VTT character names.
+  - Added Discord Bot custom Rich Presence activity (`shadowplays.de — Visit shadowplays.de | Shadowrun & Foundry VTT`) on `ready` and `guildCreate`.
+  - Added internal Helix REST endpoints (`/api/helix/status`, `/api/helix/guilds/:guildId/channels`, `/api/helix/config`, `/api/helix/sessions/:sessionId/stop`).
+- **Helix Database Models, Artifact CRUD & Shadowrun Genre (`backend/mongoDB.js`, `backend/server.js`, `backend/public/genres.json`)**:
+  - Added `HelixConfig` model (`id: "default"`, `guildId`, `guildName`, `channelId`, `channelName`, `language`) and full `/api/artifacts` CRUD routes (`GET`, `POST`, `PUT`, `DELETE`).
+  - Preserved `HELIX_METADATA_KEYS` (`sessionId`, `entries`, `markers`, `activePlayers`, `startedAt`, `endedAt`) across `normalizeAttributesToStructuredObjects` and `upsertStructuredDocument` while enforcing Structured Object Storage (`content: ""`, zero `attributes.unstructured`).
+  - Seeded the `shadowrun` genre profile (`dossier`, `outline`, `locations`, `organizations`, `secrets`, `lore`, `summary`, `transcript`) and extended `/api/projects/:projectId/export-markdown` and `constructMarkdownFromAttributes` to synthesize `transcript` and `summary` Markdown on-the-fly.
+- **Automated Release & GHCR Publish on PR Merge (`.github/workflows/publish_ghcr.yml`)**:
+  - Updated GitHub Actions workflow so merging a PR into `master` automatically parses the top version (without a leading `v`) and release notes from `CHANGELOG.md`, creates the GitHub Release and Git tag, and builds/pushes `ghcr.io/shadows-eye/shadow-writer:latest` and `:<version>`.
+
+### Refactored
+- **Top-Level Import Consolidation (`backend/server.js`)**: Consolidated all `./mongoDB` and `./editorialEngine` imports at the top of `backend/server.js` and deduplicated `upsertNoteHandler` and `upsertArtifactHandler` into `upsertStructuredDocument`.
+
+---
+
 ## [1.9.0] - 2026-08-13
 
 ### Added

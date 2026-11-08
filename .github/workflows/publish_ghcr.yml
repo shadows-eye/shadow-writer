@@ -1,12 +1,13 @@
 name: Build and Publish Shadow Writer to GHCR
 
 on:
-  release:
-    types: [published]
   push:
+    branches:
+      - master
+      - main
     tags:
-      - 'v*'
       - '[0-9]*'
+  workflow_dispatch:
 
 jobs:
   build-and-push:
@@ -19,23 +20,30 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
+      - name: Extract Version and Release Notes from CHANGELOG.md
+        id: changelog
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RAW_VER="${GITHUB_REF#refs/tags/}"
+            VERSION="${RAW_VER#v}"
+          else
+            VERSION=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | sed -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\]/\1/')
+          fi
+
+          if [ -z "$VERSION" ]; then
+            echo "Error: Could not extract version without leading v from CHANGELOG.md"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          awk '/^## \['"$VERSION"'\]/ {flag=1; next} /^## \[/ {if(flag) exit} flag' CHANGELOG.md > release_notes.txt
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -49,25 +57,17 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.changelog.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Extract Release Notes
-        id: extract_notes
-        if: github.ref_type == 'tag'
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          VERSION=${VERSION#v}
-          
-          # Extract notes for GitHub Release
-          awk '/^## \['"$VERSION"'\]/ {flag=1; next} /^## \[/ {if(flag) exit} flag' CHANGELOG.md > release_notes.txt
-
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
         with:
+          tag_name: ${{ steps.changelog.outputs.version }}
+          name: ${{ steps.changelog.outputs.version }}
           body_path: release_notes.txt
           files: CHANGELOG.md
         env:
