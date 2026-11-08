@@ -1,6 +1,6 @@
 const express = require('express');
 const { WebSocketServer, WebSocket } = require('ws');
-const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, ActivityType } = require('discord.js');
 const { joinVoiceChannel: discordJoinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const prism = require('prism-media');
 const speech = require('@google-cloud/speech');
@@ -96,6 +96,41 @@ function setupHelixEngine(app, server) {
     return speechClient;
   }
 
+  function updateBotPresence(mode = 'idle') {
+    if (!discordClient || !discordReady || !discordClient.user || typeof discordClient.user.setPresence !== 'function') {
+      return;
+    }
+    try {
+      if (mode === 'recording') {
+        discordClient.user.setPresence({
+          status: 'online',
+          activities: [
+            {
+              name: 'Shadowrun Live Session | shadowplays.de',
+              state: '🎙️ Recording Run • https://shadowplays.de',
+              type: ActivityType.Listening,
+              url: 'https://shadowplays.de'
+            }
+          ]
+        });
+      } else {
+        discordClient.user.setPresence({
+          status: 'online',
+          activities: [
+            {
+              name: 'shadowplays.de | Shadowrun Co-GM',
+              state: '🌐 https://shadowplays.de',
+              type: ActivityType.Playing,
+              url: 'https://shadowplays.de'
+            }
+          ]
+        });
+      }
+    } catch (err) {
+      console.warn('[Helix] Failed to update Discord bot presence:', err.message);
+    }
+  }
+
   // Initialize Discord client if DISCORD_BOT_TOKEN is provided
   if (process.env.DISCORD_BOT_TOKEN && process.env.DISCORD_BOT_TOKEN.trim()) {
     try {
@@ -108,6 +143,7 @@ function setupHelixEngine(app, server) {
       discordClient.once('ready', () => {
         discordReady = true;
         console.log(`[Helix] Discord bot logged in as ${discordClient.user ? discordClient.user.tag : 'unknown'}`);
+        updateBotPresence('idle');
       });
       discordClient.on('error', (err) => {
         console.error('[Helix] Discord client error:', err.message);
@@ -655,6 +691,7 @@ function setupHelixEngine(app, server) {
     };
 
     await queueTranscriptSave(activeSession);
+    updateBotPresence('recording');
 
     // Connect Discord voice channel
 
@@ -769,6 +806,7 @@ function setupHelixEngine(app, server) {
       const rendered = renderTranscriptFromEntries(session.entries);
       transcriptText = rendered.text;
       activeSession = null;
+      updateBotPresence('idle');
     } else {
       const doc = await Artifact.findOne({ id: `transcript-${sessionId}` });
       if (doc) {
