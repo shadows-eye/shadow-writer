@@ -43,8 +43,16 @@ const {
   HelixConfig,
   ContextFile,
   parseCharacterAttributes,
-  getDynamicAttributeKeys
+  getDynamicAttributeKeys,
+  sanitizeAndStructureContent,
+  sanitizeAttributesObj,
+  normalizeAttributesToStructuredObjects,
+  METADATA_ATTRIBUTE_KEYS,
+  extractString,
+  ensureCleanDocumentOnRead,
+  constructMarkdownFromAttributes
 } = require('./mongoDB');
+const { reconstructChapterProse } = require('./editorialEngine');
 
 const { exec } = require('child_process');
 const util = require('util');
@@ -580,13 +588,6 @@ app.get('/api/projects/:projectId/export-markdown', async (req, res) => {
   const project = findProject(projects, projectId) || { id: projectId, name: projectId };
 
   try {
-    const {
-      ensureCleanDocumentOnRead,
-      sanitizeAttributesObj,
-      constructMarkdownFromAttributes
-    } = require('./mongoDB');
-    const { reconstructChapterProse } = require('./editorialEngine');
-
     const [notes, characters, chapters, artifacts] = await Promise.all([
       Note.find({ projectId: project.id }),
       Character.find({ projectId: project.id }),
@@ -1408,14 +1409,6 @@ async function upsertStructuredDocument(Model, docType, req, res) {
   }
 
   try {
-    const {
-      sanitizeAndStructureContent,
-      sanitizeAttributesObj,
-      normalizeAttributesToStructuredObjects,
-      METADATA_ATTRIBUTE_KEYS,
-      extractString
-    } = require('./mongoDB');
-
     let existingDoc = null;
     const requestedPid = projectId || req.query.projectId;
     if (requestedPid) {
@@ -1587,7 +1580,6 @@ app.put('/api/notes/:id', upsertNoteHandler);
 
 // --- ARTIFACTS API ---
 function formatArtifactResponse(doc) {
-  const { sanitizeAttributesObj } = require('./mongoDB');
   const cleanAttrs = sanitizeAttributesObj(doc.attributes);
   delete cleanAttrs.unstructured;
   const docTitle = doc.title || doc.name || cleanAttrs.title || doc.id;
@@ -1609,7 +1601,6 @@ function formatArtifactResponse(doc) {
 app.get('/api/artifacts', async (req, res) => {
   const { projectId, type, subtypeTag } = req.query;
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
     const query = {};
     if (projectId) query.projectId = projectId;
     const list = await Artifact.find(query).sort({ lastEdited: -1 });
@@ -1632,7 +1623,6 @@ app.get('/api/artifacts/:id', async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.query;
   try {
-    const { ensureCleanDocumentOnRead } = require('./mongoDB');
     let doc = null;
     if (projectId) {
       doc = await Artifact.findOne({ projectId, id });
