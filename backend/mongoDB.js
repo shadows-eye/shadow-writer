@@ -5,14 +5,20 @@ const fsPromises = require('fs/promises');
 
 const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/shadow_writer';
 
-mongoose.connect(mongoUri)
-  .then(() => {
+const dbReadyPromise = mongoose.connect(mongoUri)
+  .then(async () => {
     console.log('Connected to MongoDB');
-    seedDatabaseIfEmpty()
-      .then(() => migrateExistingCharacters().catch(err => console.error('Migration error:', err)))
-      .then(() => migrateExistingCharacterElements().catch(err => console.error('Element migration error:', err)))
-      .then(() => cleanDatabaseOnStartup().catch(err => console.error('Startup cleanup error:', err)))
-      .catch(err => console.error('Error seeding database:', err));
+    if (mongoose.connection.readyState !== 1) return;
+    try {
+      await seedDatabaseIfEmpty();
+      if (mongoose.connection.readyState === 1) await migrateExistingCharacters().catch(err => console.error('Migration error:', err));
+      if (mongoose.connection.readyState === 1) await migrateExistingCharacterElements().catch(err => console.error('Element migration error:', err));
+      if (mongoose.connection.readyState === 1) await cleanDatabaseOnStartup().catch(err => console.error('Startup cleanup error:', err));
+    } catch (err) {
+      if (mongoose.connection.readyState === 1) {
+        console.error('Error seeding database:', err);
+      }
+    }
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
@@ -219,10 +225,18 @@ const NoteSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
   name: String,
+  title: String,
   type: { type: String, default: 'note' },
+  subtypeTag: { type: String, index: true },
   attributes: { type: Map, of: mongoose.Schema.Types.Mixed }, // dynamic attributes
-  content: String,
+  content: { type: String, default: '' },
   lastEdited: { type: Date, default: Date.now }
+});
+NoteSchema.pre('validate', function() {
+  if (!this.name && this.title) this.name = this.title;
+  if (!this.title && this.name) this.title = this.name;
+  if (!this.subtypeTag && this.type) this.subtypeTag = this.type;
+  if (this.content === undefined || this.content === null) this.content = '';
 });
 NoteSchema.index({ projectId: 1, id: 1 }, { unique: true });
 const Note = mongoose.model('Note', NoteSchema);
@@ -231,13 +245,32 @@ const ArtifactSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
   name: String,
+  title: String,
   type: { type: String, default: 'artifact' },
+  subtypeTag: { type: String, index: true },
   attributes: { type: Map, of: mongoose.Schema.Types.Mixed },
-  content: String,
+  content: { type: String, default: '' },
   lastEdited: { type: Date, default: Date.now }
+});
+ArtifactSchema.pre('validate', function() {
+  if (!this.name && this.title) this.name = this.title;
+  if (!this.title && this.name) this.title = this.name;
+  if (!this.subtypeTag && this.type) this.subtypeTag = this.type;
+  if (this.content === undefined || this.content === null) this.content = '';
 });
 ArtifactSchema.index({ projectId: 1, id: 1 }, { unique: true });
 const Artifact = mongoose.model('Artifact', ArtifactSchema);
+
+const HelixConfigSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true, default: 'default' },
+  guildId: { type: String, default: '' },
+  guildName: { type: String, default: '' },
+  channelId: { type: String, default: '' },
+  channelName: { type: String, default: '' },
+  language: { type: String, default: 'de-DE' },
+  updatedAt: { type: Date, default: Date.now }
+});
+const HelixConfig = mongoose.model('HelixConfig', HelixConfigSchema);
 
 let dynamicSchemaCache = null;
 const invalidateSchemaCache = () => { dynamicSchemaCache = null; };
@@ -340,7 +373,13 @@ const METADATA_ATTRIBUTE_KEYS = new Set([
   'scenes',
   'manuscript',
   'pendingDiffRunId',
-  'pendingDiff'
+  'pendingDiff',
+  'sessionId',
+  'entries',
+  'markers',
+  'activePlayers',
+  'startedAt',
+  'endedAt'
 ]);
 
 function toStructuredAttrObject(val) {
@@ -382,7 +421,9 @@ function normalizeAttributesToStructuredObjects(rawAttrs, defaultType = null) {
     } else if (typeof v === 'object' && v !== null) {
       if (v.text !== undefined || v.html !== undefined) {
         const obj = toStructuredAttrObject(v);
-        if (obj.text || obj.html) normalized[k] = obj;
+        if (obj.text || obj.html || k === 'transcript' || k === 'summary' || k === 'next_steps') {
+          normalized[k] = obj;
+        }
       } else {
         normalized[k] = v;
       }
@@ -828,6 +869,8 @@ function sanitizeAttributesObj(rawAttrs) {
     if (k && !k.startsWith('$') && !k.startsWith('_') && typeof v !== 'function') {
       if (v !== '' && v !== null && v !== undefined) {
         clean[k] = v;
+      } else if (k === 'endedAt' && v === null) {
+        clean[k] = null;
       }
     }
   }
@@ -849,7 +892,7 @@ async function updateDocumentAttributeKeys(Model, projectId, id, attributeUpdate
   // For Mongoose Maps, we must explicitly delete keys that are null, empty, or undefined.
   for (const [k, v] of Object.entries(attributeUpdates)) {
     if (k && !k.startsWith('$') && !k.startsWith('_') && typeof v !== 'function') {
-      if (v === '' || v === null || v === undefined) {
+      if ((v === '' || v === null || v === undefined) && !(k === 'endedAt' && v === null)) {
         console.log(`[DEBUG MONGODB] Attempting to delete key: ${k}`);
         if (doc.attributes && typeof doc.attributes.delete === 'function') {
             doc.attributes.delete(k);
@@ -890,9 +933,53 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
     return s;
   };
 
-  const normType = (type || '').toLowerCase();
+  const normType = String(type || attrsObj.subtypeTag || attrsObj.type || '').toLowerCase().trim();
 
-  if (normType === 'character' || normType === 'characters') {
+  if (normType === 'transcript' || String(attrsObj.subtypeTag || '').toLowerCase() === 'transcript') {
+    if (attrsObj.sessionId) md += `- **Session ID**: ${attrsObj.sessionId}\n`;
+    if (attrsObj.startedAt) md += `- **Started At**: ${attrsObj.startedAt}\n`;
+    if (attrsObj.endedAt) md += `- **Ended At**: ${attrsObj.endedAt}\n`;
+    if (Array.isArray(attrsObj.activePlayers) && attrsObj.activePlayers.length > 0) {
+      const playerLabels = attrsObj.activePlayers
+        .map(p => (p && (p.name || p.foundryId || p.discordId)) || '')
+        .filter(Boolean);
+      if (playerLabels.length > 0) {
+        md += `- **Active Players**: ${playerLabels.join(', ')}\n`;
+      }
+    }
+    md += `\n---\n\n## Transcript\n`;
+    const transcriptText = cleanAttr(attrsObj.transcript);
+    if (transcriptText) {
+      md += `${transcriptText}\n\n`;
+    } else if (Array.isArray(attrsObj.entries) && attrsObj.entries.length > 0) {
+      const renderedLines = attrsObj.entries.map(entry => {
+        if (!entry) return '';
+        const ts = entry.timestamp ? `[${entry.timestamp}] ` : '';
+        if (entry.kind === 'marker' || entry.markerType) {
+          const mType = (entry.markerType || 'marker').toUpperCase();
+          return `${ts}[${mType}] ${entry.text || entry.label || ''}`;
+        }
+        const speaker = entry.speaker || entry.foundryId || entry.discordId || 'Speaker';
+        return `${ts}${speaker}: ${entry.text || ''}`;
+      }).filter(Boolean);
+      md += `${renderedLines.join('\n')}\n\n`;
+    }
+  } else if (normType === 'summary' || String(attrsObj.subtypeTag || '').toLowerCase() === 'summary') {
+    if (attrsObj.sessionId) {
+      md += `- **Session ID**: ${attrsObj.sessionId}\n\n---\n\n`;
+    }
+    const summaryText = cleanAttr(attrsObj.summary || attrsObj.Summary);
+    const nextStepsText = cleanAttr(attrsObj.next_steps || attrsObj['Next Steps'] || attrsObj['next steps']);
+    if (summaryText) md += `## Summary\n${summaryText}\n\n---\n\n`;
+    if (nextStepsText) md += `## Next Steps\n${nextStepsText}\n\n`;
+    const extraKeys = Object.keys(attrsObj).filter(
+      k => !METADATA_ATTRIBUTE_KEYS.has(k) && !['summary', 'next_steps', 'next steps'].includes(k.toLowerCase()) && attrsObj[k]
+    );
+    extraKeys.forEach(k => {
+      const titleKey = k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      md += `---\n\n## ${titleKey}\n${cleanAttr(attrsObj[k])}\n\n`;
+    });
+  } else if (normType === 'character' || normType === 'characters') {
     const race = cleanAttr(attrsObj.race);
     const age = cleanAttr(attrsObj.age);
     const rank = cleanAttr(attrsObj.rank);
@@ -1045,6 +1132,10 @@ async function migrateExistingCharacterElements() {
 async function ensureCleanDocumentOnRead(doc, type = 'note') {
   if (!doc) return doc;
 
+  if (!doc.name && doc.title) doc.name = doc.title;
+  if (!doc.title && doc.name) doc.title = doc.name;
+  if (!doc.subtypeTag && doc.type) doc.subtypeTag = doc.type;
+
   const existingAttrsRaw = doc.attributes ? sanitizeAttributesObj(doc.attributes) : {};
   const hasUnstructured = existingAttrsRaw.unstructured !== undefined;
   const rawContent = typeof doc.content === 'string' ? doc.content.trim() : '';
@@ -1107,6 +1198,12 @@ async function cleanDatabaseOnStartup() {
     const characters = await Character.find({});
     for (const doc of characters) {
       await ensureCleanDocumentOnRead(doc, 'character');
+      cleanedCount++;
+    }
+
+    const artifacts = await Artifact.find({});
+    for (const doc of artifacts) {
+      await ensureCleanDocumentOnRead(doc, 'artifact');
       cleanedCount++;
     }
 
@@ -1194,5 +1291,7 @@ module.exports = {
   Character,
   Note,
   Artifact,
-  ContextFile
+  HelixConfig,
+  ContextFile,
+  dbReadyPromise
 };
