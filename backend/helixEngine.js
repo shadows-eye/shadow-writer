@@ -147,6 +147,13 @@ function setupHelixEngine(app, server) {
     return [];
   }
 
+  function normalizeVoiceChannelType(rawType) {
+    if (rawType === 13 || rawType === ChannelType.GuildStageVoice || rawType === 'GuildStageVoice') {
+      return 13;
+    }
+    return 2;
+  }
+
   function getVoiceChannelsForGuild(guildId) {
     if (mockDiscordState !== null && Array.isArray(mockDiscordState.guilds)) {
       const guild = mockDiscordState.guilds.find(g => String(g.id) === String(guildId));
@@ -156,7 +163,7 @@ function setupHelixEngine(app, server) {
         .map(ch => ({
           id: String(ch.id),
           name: String(ch.name),
-          type: ch.type === 13 || ch.type === 'GuildStageVoice' ? 'GuildStageVoice' : 'GuildVoice'
+          type: normalizeVoiceChannelType(ch.type)
         }));
     }
     if (discordClient && discordReady && discordClient.guilds && discordClient.guilds.cache) {
@@ -167,7 +174,7 @@ function setupHelixEngine(app, server) {
         .map(ch => ({
           id: String(ch.id),
           name: String(ch.name),
-          type: ch.type === ChannelType.GuildStageVoice ? 'GuildStageVoice' : 'GuildVoice'
+          type: normalizeVoiceChannelType(ch.type)
         }));
     }
     return [];
@@ -211,6 +218,15 @@ function setupHelixEngine(app, server) {
       const online = isBotOnline();
       const botTag = getBotTag();
       const guilds = getGuildsList();
+      const installedGuildIds = guilds.map(g => String(g.id));
+      const connectedGuildId = (activeSession && activeSession.guildId) || config.guildId || null;
+      const connectedChannelId = (activeSession && activeSession.channelId) || config.channelId || null;
+      const botStatus = {
+        online,
+        connectedGuildId,
+        connectedChannelId,
+        installedGuildIds
+      };
       const activeSessionSummary = activeSession
         ? {
             sessionId: activeSession.sessionId,
@@ -223,6 +239,10 @@ function setupHelixEngine(app, server) {
         online,
         botOnline: online,
         botTag,
+        connectedGuildId,
+        connectedChannelId,
+        installedGuildIds,
+        botStatus,
         guilds,
         config: {
           id: 'default',
@@ -614,9 +634,13 @@ function setupHelixEngine(app, server) {
     );
 
     const startedAt = new Date().toISOString();
+    const guildId = payload.guildId || config.guildId;
+    const channelId = payload.channelId || config.channelId;
     activeSession = {
       sessionId,
       projectId,
+      guildId: guildId ? String(guildId) : '',
+      channelId: channelId ? String(channelId) : '',
       startedAt,
       endedAt: null,
       dossier: String(payload.dossier || ''),
@@ -633,8 +657,6 @@ function setupHelixEngine(app, server) {
     await queueTranscriptSave(activeSession);
 
     // Connect Discord voice channel
-    const guildId = payload.guildId || config.guildId;
-    const channelId = payload.channelId || config.channelId;
 
     if (voiceDeps.joinVoiceChannel) {
       try {

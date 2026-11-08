@@ -1399,66 +1399,110 @@ app.get('/api/notes/:id', async (req, res) => {
   }
 });
 
-async function upsertNoteHandler(req, res) {
+async function upsertStructuredDocument(Model, docType, req, res) {
   const id = req.params.id || (req.body && req.body.id);
   const { name, title, type: reqType, subtypeTag: reqSubtypeTag, content, projectId, attributes: reqAttributes } = req.body || {};
-  if (!id) return res.status(400).json({ error: 'Missing note id' });
-  if (!content && !reqAttributes && !name && !title) return res.status(400).json({ error: 'Missing content or attributes' });
-  const pId = projectId || req.query.projectId || 'global';
+  if (!id) return res.status(400).json({ error: `Missing ${docType} id` });
+  if (docType === 'note' && !content && !reqAttributes && !name && !title) {
+    return res.status(400).json({ error: 'Missing content or attributes' });
+  }
 
   try {
-    const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, METADATA_ATTRIBUTE_KEYS, extractString } = require('./mongoDB');
-    const existingNote = await Note.findOne({ projectId: pId, id });
-    const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
+    const {
+      sanitizeAndStructureContent,
+      sanitizeAttributesObj,
+      normalizeAttributesToStructuredObjects,
+      METADATA_ATTRIBUTE_KEYS,
+      extractString
+    } = require('./mongoDB');
+
+    let existingDoc = null;
+    const requestedPid = projectId || req.query.projectId;
+    if (requestedPid) {
+      existingDoc = await Model.findOne({ projectId: requestedPid, id });
+    }
+    if (!existingDoc && docType === 'artifact') {
+      existingDoc = await Model.findOne({ id });
+    } else if (!existingDoc) {
+      existingDoc = await Model.findOne({ projectId: 'global', id });
+    }
+    const pId = requestedPid || (existingDoc && existingDoc.projectId) || 'global';
+    const existingAttrsObj = existingDoc ? sanitizeAttributesObj(existingDoc.attributes) : {};
 
     const hasStructuredCustomInput = reqAttributes && typeof reqAttributes === 'object' && Object.keys(reqAttributes).some(
       k => !METADATA_ATTRIBUTE_KEYS.has(k) && k !== 'unstructured'
     );
-    const contentToParse = hasStructuredCustomInput ? '' : (content || (existingNote ? existingNote.content : ''));
+    const contentToParse = hasStructuredCustomInput
+      ? ''
+      : (content || (docType === 'note' && existingDoc ? existingDoc.content : ''));
 
-    let { id: normId, type: normType, name: normName, attributes: parsedAttrs } = sanitizeAndStructureContent(contentToParse, reqType || reqSubtypeTag || 'note', id);
-    const targetType = reqSubtypeTag || reqType || (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
-    const targetSubtype = reqSubtypeTag || (reqAttributes && reqAttributes.subtypeTag) || targetType;
-    const mergedRaw = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetSubtype };
+    const parsedResult = sanitizeAndStructureContent(contentToParse, reqType || reqSubtypeTag || docType, id);
+    const normId = docType === 'note' ? parsedResult.id : id;
+    const normType = parsedResult.type;
+    const normName = parsedResult.name;
+    const parsedAttrs = contentToParse ? parsedResult.attributes : {};
+
+    const targetType = docType === 'note'
+      ? (reqSubtypeTag || reqType || (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note')
+      : (reqType || reqSubtypeTag || (reqAttributes && (reqAttributes.type || reqAttributes.subtypeTag)) || (existingDoc && existingDoc.type) || existingAttrsObj.type || 'artifact');
+    const targetSubtype = reqSubtypeTag || (reqAttributes && reqAttributes.subtypeTag) || (existingDoc && existingDoc.subtypeTag) || existingAttrsObj.subtypeTag || targetType;
+
+    const mergedRaw = {
+      ...(existingAttrsObj || {}),
+      ...(parsedAttrs || {}),
+      ...(reqAttributes || {}),
+      type: targetType,
+      subtypeTag: targetSubtype
+    };
     delete mergedRaw.unstructured;
-    const mergedAttributes = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
-    delete mergedAttributes.unstructured;
+
+    const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
+    delete normalizedAttrs.unstructured;
+
+    for (const metaKey of ['sessionId', 'entries', 'markers', 'activePlayers', 'startedAt', 'endedAt']) {
+      if (Object.prototype.hasOwnProperty.call(mergedRaw, metaKey)) {
+        normalizedAttrs[metaKey] = mergedRaw[metaKey];
+      }
+    }
+
     if (reqAttributes) {
       for (const [k, v] of Object.entries(reqAttributes)) {
         if ((v === '' || v === null) && !(k === 'endedAt' && v === null)) {
-          mergedAttributes[k] = null;
+          normalizedAttrs[k] = null;
         }
       }
     }
 
-    let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));
-    if (!note) {
-      note = new Note({ projectId: pId, id: normId });
+    let doc = existingDoc || (await Model.findOne({ projectId: pId, id: normId }));
+    if (!doc) {
+      doc = new Model({ projectId: pId, id: normId });
     }
-    if (!note.attributes) note.attributes = {};
-    if (note.attributes && typeof note.attributes.delete === 'function') {
-      note.attributes.delete('unstructured');
-    } else if (note.attributes) {
-      note.set('attributes.unstructured', undefined);
+    doc.projectId = pId;
+
+    if (!doc.attributes) doc.attributes = {};
+    if (doc.attributes && typeof doc.attributes.delete === 'function') {
+      doc.attributes.delete('unstructured');
+    } else if (doc.attributes) {
+      doc.set('attributes.unstructured', undefined);
     }
-    for (const [k, v] of Object.entries(mergedAttributes)) {
+
+    for (const [k, v] of Object.entries(normalizedAttrs)) {
       if ((v === '' || v === null || v === undefined) && !(k === 'endedAt' && v === null)) {
-        if (note.attributes && typeof note.attributes.delete === 'function') {
-          note.attributes.delete(k);
+        if (doc.attributes && typeof doc.attributes.delete === 'function') {
+          doc.attributes.delete(k);
         } else {
-          note.set(`attributes.${k}`, undefined);
+          doc.set(`attributes.${k}`, undefined);
         }
       } else {
-        if (note.attributes && typeof note.attributes.set === 'function') {
-          note.attributes.set(k, v);
+        if (doc.attributes && typeof doc.attributes.set === 'function') {
+          doc.attributes.set(k, v);
         } else {
-          note.set(`attributes.${k}`, v);
+          doc.set(`attributes.${k}`, v);
         }
       }
     }
 
-    // Enforce unique subtypeTag for 'dossier' and 'outline' per project
-    if (targetType === 'dossier' || targetType === 'outline') {
+    if (docType === 'note' && (targetType === 'dossier' || targetType === 'outline')) {
       try {
         const conflictingNotes = await Note.find({ projectId: pId, id: { $ne: normId } });
         for (const confNote of conflictingNotes) {
@@ -1483,48 +1527,58 @@ async function upsertNoteHandler(req, res) {
     }
 
     const reqName = title || name || (reqAttributes && (reqAttributes.title || reqAttributes.name));
-    const resolvedTitle = extractString(reqName) || extractString(normName) || note.title || note.name || id;
-    note.name = resolvedTitle;
-    note.title = resolvedTitle;
-    note.type = targetType;
-    note.subtypeTag = targetSubtype;
-    note.content = "";
-    note.markModified('attributes');
-    note.lastEdited = new Date();
-    await note.save();
+    const resolvedTitle = extractString(reqName) || (docType === 'note' ? extractString(normName) : '') || doc.title || doc.name || id;
+    doc.name = resolvedTitle;
+    doc.title = resolvedTitle;
+    doc.type = targetType;
+    doc.subtypeTag = targetSubtype;
+    doc.content = '';
+    doc.markModified('attributes');
+    doc.lastEdited = new Date();
+    await doc.save();
 
-    // Save to History
-    await History.create({
-      jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
-      projectId: pId,
-      type: 'manual_edit',
-      status: 'complete',
-      progress: 1.0,
-      logs: [`Update note: ${normId}`]
-    });
+    if (docType === 'note') {
+      await History.create({
+        jobId: 'manual_' + Math.random().toString(36).substring(2, 15),
+        projectId: pId,
+        type: 'manual_edit',
+        status: 'complete',
+        progress: 1.0,
+        logs: [`Update note: ${normId}`]
+      });
+      const cleanSavedAttrs = sanitizeAttributesObj(doc.attributes);
+      const formattedNote = {
+        id: doc.id,
+        projectId: doc.projectId,
+        name: doc.name,
+        title: doc.title,
+        type: doc.type,
+        subtypeTag: doc.subtypeTag,
+        content: '',
+        attributes: cleanSavedAttrs
+      };
+      return res.json({
+        success: true,
+        commit: 'db_' + Math.random().toString(36).substring(2, 10),
+        ...formattedNote,
+        note: formattedNote
+      });
+    }
 
-    const cleanSavedAttrs = sanitizeAttributesObj(note.attributes);
-    const formattedNote = {
-      id: note.id,
-      projectId: note.projectId,
-      name: note.name,
-      title: note.title,
-      type: note.type,
-      subtypeTag: note.subtypeTag,
-      content: '',
-      attributes: cleanSavedAttrs
-    };
-
-    res.json({
+    const formatted = formatArtifactResponse(doc);
+    return res.json({
       success: true,
-      commit: 'db_' + Math.random().toString(36).substring(2, 10),
-      ...formattedNote,
-      note: formattedNote
+      ...formatted,
+      artifact: formatted
     });
   } catch (err) {
-    console.error('Error saving note:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(`Error saving ${docType}:`, err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+async function upsertNoteHandler(req, res) {
+  return upsertStructuredDocument(Note, 'note', req, res);
 }
 
 app.post('/api/notes', upsertNoteHandler);
@@ -1596,117 +1650,7 @@ app.get('/api/artifacts/:id', async (req, res) => {
 });
 
 async function upsertArtifactHandler(req, res) {
-  const id = req.params.id || (req.body && req.body.id);
-  if (!id) return res.status(400).json({ error: 'Missing artifact id' });
-  const {
-    projectId,
-    name,
-    title,
-    type: reqType,
-    subtypeTag: reqSubtypeTag,
-    content,
-    attributes: reqAttributes
-  } = req.body || {};
-
-  try {
-    const {
-      sanitizeAndStructureContent,
-      sanitizeAttributesObj,
-      normalizeAttributesToStructuredObjects,
-      METADATA_ATTRIBUTE_KEYS,
-      extractString
-    } = require('./mongoDB');
-
-    let existingDoc = null;
-    if (projectId) {
-      existingDoc = await Artifact.findOne({ projectId, id });
-    }
-    if (!existingDoc) {
-      existingDoc = await Artifact.findOne({ id });
-    }
-    const pId = projectId || req.query.projectId || (existingDoc && existingDoc.projectId) || 'global';
-    const existingAttrsObj = existingDoc ? sanitizeAttributesObj(existingDoc.attributes) : {};
-
-    const hasStructuredCustomInput = reqAttributes && typeof reqAttributes === 'object' && Object.keys(reqAttributes).some(
-      k => !METADATA_ATTRIBUTE_KEYS.has(k) && k !== 'unstructured'
-    );
-    const contentToParse = hasStructuredCustomInput ? '' : (content || '');
-    const parsedFromContent = contentToParse
-      ? sanitizeAndStructureContent(contentToParse, reqType || reqSubtypeTag || 'artifact', id).attributes
-      : {};
-
-    const targetType = reqType || reqSubtypeTag || (reqAttributes && (reqAttributes.type || reqAttributes.subtypeTag)) || (existingDoc && existingDoc.type) || existingAttrsObj.type || 'artifact';
-    const targetSubtype = reqSubtypeTag || (reqAttributes && reqAttributes.subtypeTag) || (existingDoc && existingDoc.subtypeTag) || existingAttrsObj.subtypeTag || targetType;
-
-    const mergedRaw = {
-      ...existingAttrsObj,
-      ...parsedFromContent,
-      ...(reqAttributes || {}),
-      type: targetType,
-      subtypeTag: targetSubtype
-    };
-    delete mergedRaw.unstructured;
-
-    const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
-    delete normalizedAttrs.unstructured;
-
-    // Explicitly preserve Helix metadata keys if present on mergedRaw
-    for (const metaKey of ['sessionId', 'entries', 'markers', 'activePlayers', 'startedAt', 'endedAt']) {
-      if (Object.prototype.hasOwnProperty.call(mergedRaw, metaKey)) {
-        normalizedAttrs[metaKey] = mergedRaw[metaKey];
-      }
-    }
-
-    let doc = existingDoc;
-    if (!doc) {
-      doc = new Artifact({ projectId: pId, id });
-    }
-    doc.projectId = pId;
-
-    const resolvedTitle = extractString(title || name || (reqAttributes && (reqAttributes.title || reqAttributes.name))) || doc.title || doc.name || id;
-    doc.name = resolvedTitle;
-    doc.title = resolvedTitle;
-    doc.type = targetType;
-    doc.subtypeTag = targetSubtype;
-    doc.content = '';
-
-    if (!doc.attributes) doc.attributes = {};
-    if (doc.attributes && typeof doc.attributes.delete === 'function') {
-      doc.attributes.delete('unstructured');
-    } else if (doc.attributes) {
-      doc.set('attributes.unstructured', undefined);
-    }
-
-    for (const [k, v] of Object.entries(normalizedAttrs)) {
-      if ((v === '' || v === null || v === undefined) && !(k === 'endedAt' && v === null)) {
-        if (doc.attributes && typeof doc.attributes.delete === 'function') {
-          doc.attributes.delete(k);
-        } else {
-          doc.set(`attributes.${k}`, undefined);
-        }
-      } else {
-        if (doc.attributes && typeof doc.attributes.set === 'function') {
-          doc.attributes.set(k, v);
-        } else {
-          doc.set(`attributes.${k}`, v);
-        }
-      }
-    }
-
-    doc.markModified('attributes');
-    doc.lastEdited = new Date();
-    await doc.save();
-
-    const formatted = formatArtifactResponse(doc);
-    res.json({
-      success: true,
-      ...formatted,
-      artifact: formatted
-    });
-  } catch (err) {
-    console.error('Error saving artifact:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+  return upsertStructuredDocument(Artifact, 'artifact', req, res);
 }
 
 app.post('/api/artifacts', upsertArtifactHandler);

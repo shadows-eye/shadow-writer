@@ -968,12 +968,12 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
     if (attrsObj.sessionId) {
       md += `- **Session ID**: ${attrsObj.sessionId}\n\n---\n\n`;
     }
-    const summaryText = cleanAttr(attrsObj.summary);
-    const nextStepsText = cleanAttr(attrsObj.next_steps);
+    const summaryText = cleanAttr(attrsObj.summary || attrsObj.Summary);
+    const nextStepsText = cleanAttr(attrsObj.next_steps || attrsObj['Next Steps'] || attrsObj['next steps']);
     if (summaryText) md += `## Summary\n${summaryText}\n\n---\n\n`;
     if (nextStepsText) md += `## Next Steps\n${nextStepsText}\n\n`;
     const extraKeys = Object.keys(attrsObj).filter(
-      k => !METADATA_ATTRIBUTE_KEYS.has(k) && k !== 'summary' && k !== 'next_steps' && attrsObj[k]
+      k => !METADATA_ATTRIBUTE_KEYS.has(k) && !['summary', 'next_steps', 'next steps'].includes(k.toLowerCase()) && attrsObj[k]
     );
     extraKeys.forEach(k => {
       const titleKey = k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());

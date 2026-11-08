@@ -124,6 +124,17 @@ async function runTests() {
   assert.ok(summaryMd.includes('# Run Summary (sess-001)'));
   assert.ok(summaryMd.includes('Team infiltrated Renraku Arcology'));
   assert.ok(summaryMd.includes('Meet Mr. Johnson at Docking Bay 9'));
+  assert.strictEqual((summaryMd.match(/## Summary/g) || []).length, 1);
+  assert.strictEqual((summaryMd.match(/## Next Steps/g) || []).length, 1);
+
+  // Verify case-insensitive deduplication when both Summary/summary or Next Steps/next_steps exist
+  const summaryDupMd = mongoDB.constructMarkdownFromAttributes('Run Summary (sess-001)', 'summary', {
+    ...summaryAttrs,
+    Summary: summaryAttrs.summary,
+    'Next Steps': summaryAttrs.next_steps
+  });
+  assert.strictEqual((summaryDupMd.match(/## Summary/g) || []).length, 1, '## Summary must not render twice');
+  assert.strictEqual((summaryDupMd.match(/## Next Steps/g) || []).length, 1, '## Next Steps must not render twice');
 
   // 1f. Verify shadowrun genre in genres.json
   const genresJson = require('./public/genres.json');
@@ -343,8 +354,10 @@ async function runTests() {
     assert.strictEqual(channelsRes.data.length, 2, 'Only GuildVoice and GuildStageVoice channels should be returned');
     assert.strictEqual(channelsRes.data[0].id, 'ch-voice-1');
     assert.strictEqual(channelsRes.data[0].name, 'Matrix Comms');
+    assert.strictEqual(channelsRes.data[0].type, 2);
     assert.strictEqual(channelsRes.data[1].id, 'ch-stage-1');
     assert.strictEqual(channelsRes.data[1].name, 'Johnson Briefing');
+    assert.strictEqual(channelsRes.data[1].type, 13);
 
     // 3c. Verify POST /api/helix/config validates language ("de-DE" or "en-US") and resolves guildName & channelName
     const badLangRes = await apiReq('POST', '/api/helix/config', {
@@ -385,11 +398,20 @@ async function runTests() {
       language: 'de-DE'
     });
 
-    // 3d. Verify GET /api/helix/status returns online, botTag, guilds, config, activeSession
+    // 3d. Verify GET /api/helix/status returns online, botTag, guilds, botStatus, config, activeSession
     const statusRes = await apiReq('GET', '/api/helix/status');
     assert.strictEqual(statusRes.status, 200);
     assert.strictEqual(statusRes.data.online, true);
     assert.strictEqual(statusRes.data.botTag, 'Helix#2080');
+    assert.strictEqual(statusRes.data.connectedGuildId, 'guild-sr-seattle');
+    assert.strictEqual(statusRes.data.connectedChannelId, 'ch-voice-1');
+    assert.deepStrictEqual(statusRes.data.installedGuildIds, ['guild-sr-seattle']);
+    assert.deepStrictEqual(statusRes.data.botStatus, {
+      online: true,
+      connectedGuildId: 'guild-sr-seattle',
+      connectedChannelId: 'ch-voice-1',
+      installedGuildIds: ['guild-sr-seattle']
+    });
     assert.ok(Array.isArray(statusRes.data.guilds));
     assert.strictEqual(statusRes.data.guilds[0].id, 'guild-sr-seattle');
     assert.strictEqual(statusRes.data.guilds[0].name, 'Seattle Sprawl 2080');
