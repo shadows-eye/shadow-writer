@@ -10,8 +10,8 @@ FROM node:20-bookworm-slim
 WORKDIR /app/backend
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
-# Install ca-certificates so Go binaries can verify TLS certificates
-RUN apt-get update && apt-get install -y ca-certificates git && rm -rf /var/lib/apt/lists/*
+# Install ca-certificates so Go binaries can verify TLS certificates, plus ffmpeg for Helix audio transcoding
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY backend/package*.json ./
 RUN npm install
