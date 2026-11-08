@@ -958,5 +958,183 @@
         }
       }
     ]
+  },
+  {
+    "id": "shadowrun",
+    "name": "Shadowrun",
+    "labels": {
+      "en": "Shadowrun",
+      "de": "Shadowrun"
+    },
+    "filterCategories": [
+      {
+        "id": "summary",
+        "icon": "📜",
+        "color": "bg-emerald-950/40 text-emerald-300 border-emerald-800/60",
+        "labels": {
+          "en": "Run Summaries",
+          "de": "Run-Zusammenfassungen"
+        },
+        "aliases": ["summary", "summaries", "run summary", "session summary", "zusammenfassung", "run-zusammenfassung"]
+      },
+      {
+        "id": "transcript",
+        "icon": "🎙️",
+        "color": "bg-cyan-950/40 text-cyan-300 border-cyan-800/60",
+        "labels": {
+          "en": "Session Transcripts",
+          "de": "Sitzungs-Transkripte"
+        },
+        "aliases": ["transcript", "transcripts", "session transcript", "transkript", "sitzungs-transkript", "audio log"]
+      },
+      {
+        "id": "locations",
+        "icon": "🏙️",
+        "color": "bg-rose-950/40 text-rose-300 border-rose-800/60",
+        "labels": {
+          "en": "Locations",
+          "de": "Schauplätze"
+        },
+        "aliases": ["location", "locations", "place", "sprawl", "schauplatz", "schauplaetze", "ort", "orte"]
+      },
+      {
+        "id": "organizations",
+        "icon": "🏢",
+        "color": "bg-blue-950/40 text-blue-300 border-blue-800/60",
+        "labels": {
+          "en": "Corporations & Syndicates",
+          "de": "Konzerne & Syndikate"
+        },
+        "aliases": ["organization", "organizations", "corporation", "corporations", "corp", "syndicate", "syndicates", "faction", "konzern", "konzerne", "syndikat", "fraktion"]
+      },
+      {
+        "id": "secrets",
+        "icon": "🕵️",
+        "color": "bg-amber-950/40 text-amber-300 border-amber-800/60",
+        "labels": {
+          "en": "Intel & Clues",
+          "de": "Intel & Hinweise"
+        },
+        "aliases": ["secret", "secrets", "intel", "clue", "clues", "paydata", "plot", "geheimnis", "hinweis", "hinweise", "run"]
+      },
+      {
+        "id": "lore",
+        "icon": "🌐",
+        "color": "bg-purple-950/40 text-purple-300 border-purple-800/60",
+        "labels": {
+          "en": "Lore",
+          "de": "Hintergrund & Lore"
+        },
+        "aliases": ["lore", "world", "matrix", "magic", "sixth world", "hintergrund", "welt"]
+      }
+    ],
+    "sceneTypes": [
+      {
+        "id": "the_meet",
+        "icon": "🤝",
+        "labels": {
+          "en": "The Meet & Mr. Johnson Negotiation",
+          "de": "Das Treffen & Mr.-Johnson-Verhandlung"
+        }
+      },
+      {
+        "id": "legwork_matrix",
+        "icon": "💻",
+        "labels": {
+          "en": "Legwork, Matrix Recon & Astral Scouting",
+          "de": "Beinarbeit, Matrix-Aufklärung & Astrale Erkundung"
+        }
+      },
+      {
+        "id": "infiltration_heist",
+        "icon": "🥷",
+        "labels": {
+          "en": "Black-Trenchcoat Infiltration & Heist",
+          "de": "Black-Trenchcoat-Infiltration & Zugriff"
+        }
+      },
+      {
+        "id": "combat_extraction",
+        "icon": "💥",
+        "labels": {
+          "en": "High-Threat Response & Extraction",
+          "de": "Konzern-Sicherheit & Extraktion"
+        }
+      }
+    ],
+    "characterArchetypes": [
+      {
+        "id": "street_samurai",
+        "icon": "⚔️",
+        "labels": {
+          "en": "Street Samurai / Physical Adept",
+          "de": "Straßensamurai / Ki-Adept"
+        }
+      },
+      {
+        "id": "decker_technomancer",
+        "icon": "🔌",
+        "labels": {
+          "en": "Decker / Technomancer",
+          "de": "Decker / Technomancer"
+        }
+      },
+      {
+        "id": "mage_shaman",
+        "icon": "✨",
+        "labels": {
+          "en": "Mage / Shaman",
+          "de": "Magier / Schamane"
+        }
+      },
+      {
+        "id": "face_fixer",
+        "icon": "🎭",
+        "labels": {
+          "en": "Face / Mr. Johnson / Fixer",
+          "de": "Face / Mr. Johnson / Schieber"
+        }
+      }
+    ],
+    "chapterDirectives": [
+      {
+        "id": "raise_corp_sec",
+        "icon": "🚨",
+        "labels": {
+          "en": "Escalate Matrix Overwatch or corporate security alert",
+          "de": "Matrix-Overwatch oder Konzern-Alarmstufe erhöhen"
+        }
+      },
+      {
+        "id": "reveal_twist",
+        "icon": "🕵️",
+        "labels": {
+          "en": "Introduce a corporate double-cross or hidden agenda",
+          "de": "Konzern-Verrat oder versteckte Agenda enthüllen"
+        }
+      }
+    ],
+    "outlinePresets": [
+      {
+        "id": "shadowrun_campaign_arc",
+        "targetChapters": 12,
+        "labels": {
+          "en": "12-Session Shadowrun Campaign Arc",
+          "de": "12-Sitzungen Shadowrun-Kampagnenbogen"
+        },
+        "acts": {
+          "en": [
+            "Act I: Street-Level Runs & Team Assembly (Runs 1-3)",
+            "Act II: Corporate Conspiracy & Escalation (Runs 4-8)",
+            "Act III: Arcology Infiltration & Endgame (Runs 9-12)"
+          ],
+          "de": [
+            "Akt I: Straßen-Runs & Teamfindung (Runs 1-3)",
+            "Akt II: Konzernverschwörung & Eskalation (Runs 4-8)",
+            "Akt III: Arkologie-Zugriff & Finale (Runs 9-12)"
+          ]
+        }
+      }
+    ]
   }
 ]

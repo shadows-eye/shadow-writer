@@ -1,9 +1,11 @@
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const path = require('path');
 const mongoose = require('mongoose');
 
 const app = express();
+const server = http.createServer(app);
 
 const allowedOrigins = process.env.ALLOWED_CORS_ORIGINS
   ? process.env.ALLOWED_CORS_ORIGINS.split(',').map(o => o.trim())
@@ -38,6 +40,7 @@ const {
   Character,
   Note,
   Artifact,
+  HelixConfig,
   ContextFile,
   parseCharacterAttributes,
   getDynamicAttributeKeys
@@ -50,6 +53,8 @@ const execAsync = util.promisify(exec);
 const jobs = new Map(); // jobId -> Response stream (for SSE)
 
 module.exports = {
+  app,
+  server,
   readDB,
   writeDB,
   jobs,
@@ -64,6 +69,7 @@ module.exports = {
   Character,
   Note,
   Artifact,
+  HelixConfig,
   ContextFile
 };
 
@@ -565,6 +571,93 @@ app.get('/api/projects/:projectId/export', async (req, res) => {
   } catch (err) {
     console.error('Error exporting DOCX:', err);
     res.status(500).json({ error: 'Failed to compile and export manuscript' });
+  }
+});
+
+app.get('/api/projects/:projectId/export-markdown', async (req, res) => {
+  const { projectId } = req.params;
+  const projects = await Project.find({}).lean();
+  const project = findProject(projects, projectId) || { id: projectId, name: projectId };
+
+  try {
+    const {
+      ensureCleanDocumentOnRead,
+      sanitizeAttributesObj,
+      constructMarkdownFromAttributes
+    } = require('./mongoDB');
+    const { reconstructChapterProse } = require('./editorialEngine');
+
+    const [notes, characters, chapters, artifacts] = await Promise.all([
+      Note.find({ projectId: project.id }),
+      Character.find({ projectId: project.id }),
+      Chapter.find({ projectId: project.id }).sort({ orderIndex: 1 }),
+      Artifact.find({ projectId: project.id })
+    ]);
+
+    const sections = [`# Project: ${project.name || project.id}\n`];
+    const documents = [];
+
+    for (const item of notes) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'note');
+      const attrs = sanitizeAttributesObj(cleaned.attributes);
+      const docTitle = cleaned.title || cleaned.name || cleaned.id;
+      const docType = cleaned.subtypeTag || cleaned.type || attrs.subtypeTag || attrs.type || 'note';
+      const md = constructMarkdownFromAttributes(docTitle, docType, attrs);
+      if (md) {
+        sections.push(md);
+        documents.push({ id: cleaned.id, kind: 'note', type: docType, title: docTitle, markdown: md });
+      }
+    }
+
+    for (const item of characters) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'character');
+      const attrs = sanitizeAttributesObj(cleaned.attributes);
+      const docTitle = cleaned.name || cleaned.id;
+      const md = constructMarkdownFromAttributes(docTitle, 'character', attrs);
+      if (md) {
+        sections.push(md);
+        documents.push({ id: cleaned.id, kind: 'character', type: 'character', title: docTitle, markdown: md });
+      }
+    }
+
+    for (const item of chapters) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'chapter');
+      const attrs = sanitizeAttributesObj(cleaned.attributes);
+      const docTitle = cleaned.name || cleaned.id;
+      const proseMd = reconstructChapterProse(cleaned, attrs, { asMarkdown: true }) || constructMarkdownFromAttributes(docTitle, 'chapter', attrs);
+      if (proseMd) {
+        const fullChapMd = proseMd.startsWith('#') ? proseMd : `# ${docTitle}\n\n${proseMd}`;
+        sections.push(fullChapMd);
+        documents.push({ id: cleaned.id, kind: 'chapter', type: 'chapter', title: docTitle, markdown: fullChapMd });
+      }
+    }
+
+    for (const item of artifacts) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'artifact');
+      const attrs = sanitizeAttributesObj(cleaned.attributes);
+      const docTitle = cleaned.title || cleaned.name || cleaned.id;
+      const docType = cleaned.subtypeTag || cleaned.type || attrs.subtypeTag || attrs.type || 'artifact';
+      const md = constructMarkdownFromAttributes(docTitle, docType, attrs);
+      if (md) {
+        sections.push(md);
+        documents.push({ id: cleaned.id, kind: 'artifact', type: docType, title: docTitle, markdown: md });
+      }
+    }
+
+    const fullMarkdown = sections.join('\n\n---\n\n');
+    if (req.headers.accept && req.headers.accept.includes('text/markdown')) {
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      return res.send(fullMarkdown);
+    }
+    res.json({
+      success: true,
+      projectId: project.id,
+      markdown: fullMarkdown,
+      documents
+    });
+  } catch (err) {
+    console.error('Error exporting project markdown:', err);
+    res.status(500).json({ error: 'Failed to export project markdown' });
   }
 });
 
@@ -1236,16 +1329,32 @@ app.use(editorialRouter);
 
 // --- NOTES API ---
 app.get('/api/notes', async (req, res) => {
-  const { projectId } = req.query;
+  const { projectId, type, subtypeTag } = req.query;
   const pId = projectId || 'global';
 
   try {
     const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
-    const list = await Note.find({ projectId: pId, type: { $ne: 'artifact' } });
+    const query = { projectId: pId, type: { $ne: 'artifact' } };
+    const list = await Note.find(query);
     const formatted = [];
     for (const item of list) {
       const cleaned = await ensureCleanDocumentOnRead(item, 'note');
-      formatted.push({ id: cleaned.id, content: cleaned.content, name: cleaned.name, type: cleaned.type, attributes: sanitizeAttributesObj(cleaned.attributes) });
+      const cleanAttrs = sanitizeAttributesObj(cleaned.attributes);
+      const docType = cleaned.type || cleanAttrs.type || 'note';
+      const docSubtype = cleaned.subtypeTag || cleanAttrs.subtypeTag || docType;
+      if (type && docType !== type && docSubtype !== type) continue;
+      if (subtypeTag && docSubtype !== subtypeTag && docType !== subtypeTag) continue;
+      const docTitle = cleaned.title || cleaned.name || cleaned.id;
+      formatted.push({
+        id: cleaned.id,
+        projectId: cleaned.projectId,
+        content: '',
+        name: docTitle,
+        title: docTitle,
+        type: docType,
+        subtypeTag: docSubtype,
+        attributes: cleanAttrs
+      });
     }
     res.json({ notes: formatted });
   } catch (err) {
@@ -1262,37 +1371,63 @@ app.get('/api/notes/:id', async (req, res) => {
   try {
     const { ensureCleanDocumentOnRead, sanitizeAttributesObj } = require('./mongoDB');
     let note = await Note.findOne({ projectId: pId, id });
+    if (!note && !projectId) {
+      note = await Note.findOne({ id });
+    }
     if (!note && (id === 'dossier' || id === 'story_dossier')) {
       note = await Note.findOne({ projectId: pId, id: { $in: ['final_dossier', 'story_dossier', 'dossier'] } });
     }
     if (!note) return res.status(404).json({ error: 'Note not found' });
     const cleaned = await ensureCleanDocumentOnRead(note, 'note');
-    res.json({ id: cleaned.id, name: cleaned.name, content: cleaned.content, type: cleaned.type, attributes: sanitizeAttributesObj(cleaned.attributes) });
+    const cleanAttrs = sanitizeAttributesObj(cleaned.attributes);
+    const docTitle = cleaned.title || cleaned.name || cleaned.id;
+    const docType = cleaned.type || cleanAttrs.type || 'note';
+    const docSubtype = cleaned.subtypeTag || cleanAttrs.subtypeTag || docType;
+    res.json({
+      id: cleaned.id,
+      projectId: cleaned.projectId,
+      name: docTitle,
+      title: docTitle,
+      content: '',
+      type: docType,
+      subtypeTag: docSubtype,
+      attributes: cleanAttrs
+    });
   } catch (err) {
     console.error('Error fetching single note:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-app.post('/api/notes/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, content, projectId, attributes: reqAttributes } = req.body;
-  if (!content && !reqAttributes && !name) return res.status(400).json({ error: 'Missing content or attributes' });
-  const pId = projectId || 'global';
+async function upsertNoteHandler(req, res) {
+  const id = req.params.id || (req.body && req.body.id);
+  const { name, title, type: reqType, subtypeTag: reqSubtypeTag, content, projectId, attributes: reqAttributes } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'Missing note id' });
+  if (!content && !reqAttributes && !name && !title) return res.status(400).json({ error: 'Missing content or attributes' });
+  const pId = projectId || req.query.projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, extractString } = require('./mongoDB');
+    const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, METADATA_ATTRIBUTE_KEYS, extractString } = require('./mongoDB');
     const existingNote = await Note.findOne({ projectId: pId, id });
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
-    let { id: normId, type: normType, name: normName, attributes: parsedAttrs } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
-    const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
-    const mergedRaw = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+    const hasStructuredCustomInput = reqAttributes && typeof reqAttributes === 'object' && Object.keys(reqAttributes).some(
+      k => !METADATA_ATTRIBUTE_KEYS.has(k) && k !== 'unstructured'
+    );
+    const contentToParse = hasStructuredCustomInput ? '' : (content || (existingNote ? existingNote.content : ''));
+
+    let { id: normId, type: normType, name: normName, attributes: parsedAttrs } = sanitizeAndStructureContent(contentToParse, reqType || reqSubtypeTag || 'note', id);
+    const targetType = reqSubtypeTag || reqType || (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
+    const targetSubtype = reqSubtypeTag || (reqAttributes && reqAttributes.subtypeTag) || targetType;
+    const mergedRaw = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetSubtype };
+    delete mergedRaw.unstructured;
     const mergedAttributes = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
-    mergedAttributes.unstructured = null;
+    delete mergedAttributes.unstructured;
     if (reqAttributes) {
       for (const [k, v] of Object.entries(reqAttributes)) {
-        if (v === '' || v === null) mergedAttributes[k] = null;
+        if ((v === '' || v === null) && !(k === 'endedAt' && v === null)) {
+          mergedAttributes[k] = null;
+        }
       }
     }
 
@@ -1301,8 +1436,13 @@ app.post('/api/notes/:id', async (req, res) => {
       note = new Note({ projectId: pId, id: normId });
     }
     if (!note.attributes) note.attributes = {};
+    if (note.attributes && typeof note.attributes.delete === 'function') {
+      note.attributes.delete('unstructured');
+    } else if (note.attributes) {
+      note.set('attributes.unstructured', undefined);
+    }
     for (const [k, v] of Object.entries(mergedAttributes)) {
-      if (v === '' || v === null || v === undefined) {
+      if ((v === '' || v === null || v === undefined) && !(k === 'endedAt' && v === null)) {
         if (note.attributes && typeof note.attributes.delete === 'function') {
           note.attributes.delete(k);
         } else {
@@ -1332,6 +1472,7 @@ app.post('/api/notes/:id', async (req, res) => {
               confNote.attributes.type = 'notes';
             }
             confNote.type = 'notes';
+            confNote.subtypeTag = 'notes';
             confNote.markModified('attributes');
             await confNote.save();
           }
@@ -1341,9 +1482,12 @@ app.post('/api/notes/:id', async (req, res) => {
       }
     }
 
-    const reqName = name || (reqAttributes && reqAttributes.name);
-    note.name = extractString(reqName) || extractString(normName) || note.name || id;
+    const reqName = title || name || (reqAttributes && (reqAttributes.title || reqAttributes.name));
+    const resolvedTitle = extractString(reqName) || extractString(normName) || note.title || note.name || id;
+    note.name = resolvedTitle;
+    note.title = resolvedTitle;
     note.type = targetType;
+    note.subtypeTag = targetSubtype;
     note.content = "";
     note.markModified('attributes');
     note.lastEdited = new Date();
@@ -1359,9 +1503,233 @@ app.post('/api/notes/:id', async (req, res) => {
       logs: [`Update note: ${normId}`]
     });
 
-    res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
+    const cleanSavedAttrs = sanitizeAttributesObj(note.attributes);
+    const formattedNote = {
+      id: note.id,
+      projectId: note.projectId,
+      name: note.name,
+      title: note.title,
+      type: note.type,
+      subtypeTag: note.subtypeTag,
+      content: '',
+      attributes: cleanSavedAttrs
+    };
+
+    res.json({
+      success: true,
+      commit: 'db_' + Math.random().toString(36).substring(2, 10),
+      ...formattedNote,
+      note: formattedNote
+    });
   } catch (err) {
     console.error('Error saving note:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+app.post('/api/notes', upsertNoteHandler);
+app.post('/api/notes/:id', upsertNoteHandler);
+app.put('/api/notes/:id', upsertNoteHandler);
+
+// --- ARTIFACTS API ---
+function formatArtifactResponse(doc) {
+  const { sanitizeAttributesObj } = require('./mongoDB');
+  const cleanAttrs = sanitizeAttributesObj(doc.attributes);
+  delete cleanAttrs.unstructured;
+  const docTitle = doc.title || doc.name || cleanAttrs.title || doc.id;
+  const docType = doc.type || cleanAttrs.type || 'artifact';
+  const docSubtype = doc.subtypeTag || cleanAttrs.subtypeTag || docType;
+  return {
+    id: doc.id,
+    projectId: doc.projectId,
+    name: docTitle,
+    title: docTitle,
+    type: docType,
+    subtypeTag: docSubtype,
+    content: '',
+    attributes: cleanAttrs,
+    lastEdited: doc.lastEdited
+  };
+}
+
+app.get('/api/artifacts', async (req, res) => {
+  const { projectId, type, subtypeTag } = req.query;
+  try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    const query = {};
+    if (projectId) query.projectId = projectId;
+    const list = await Artifact.find(query).sort({ lastEdited: -1 });
+    const formatted = [];
+    for (const item of list) {
+      const cleaned = await ensureCleanDocumentOnRead(item, 'artifact');
+      const fmt = formatArtifactResponse(cleaned);
+      if (type && fmt.type !== type && fmt.subtypeTag !== type) continue;
+      if (subtypeTag && fmt.subtypeTag !== subtypeTag && fmt.type !== subtypeTag) continue;
+      formatted.push(fmt);
+    }
+    res.json({ artifacts: formatted });
+  } catch (err) {
+    console.error('Error listing artifacts:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/artifacts/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  try {
+    const { ensureCleanDocumentOnRead } = require('./mongoDB');
+    let doc = null;
+    if (projectId) {
+      doc = await Artifact.findOne({ projectId, id });
+    }
+    if (!doc) {
+      doc = await Artifact.findOne({ id });
+    }
+    if (!doc) return res.status(404).json({ error: 'Artifact not found' });
+    const cleaned = await ensureCleanDocumentOnRead(doc, 'artifact');
+    res.json(formatArtifactResponse(cleaned));
+  } catch (err) {
+    console.error('Error fetching artifact:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+async function upsertArtifactHandler(req, res) {
+  const id = req.params.id || (req.body && req.body.id);
+  if (!id) return res.status(400).json({ error: 'Missing artifact id' });
+  const {
+    projectId,
+    name,
+    title,
+    type: reqType,
+    subtypeTag: reqSubtypeTag,
+    content,
+    attributes: reqAttributes
+  } = req.body || {};
+
+  try {
+    const {
+      sanitizeAndStructureContent,
+      sanitizeAttributesObj,
+      normalizeAttributesToStructuredObjects,
+      METADATA_ATTRIBUTE_KEYS,
+      extractString
+    } = require('./mongoDB');
+
+    let existingDoc = null;
+    if (projectId) {
+      existingDoc = await Artifact.findOne({ projectId, id });
+    }
+    if (!existingDoc) {
+      existingDoc = await Artifact.findOne({ id });
+    }
+    const pId = projectId || req.query.projectId || (existingDoc && existingDoc.projectId) || 'global';
+    const existingAttrsObj = existingDoc ? sanitizeAttributesObj(existingDoc.attributes) : {};
+
+    const hasStructuredCustomInput = reqAttributes && typeof reqAttributes === 'object' && Object.keys(reqAttributes).some(
+      k => !METADATA_ATTRIBUTE_KEYS.has(k) && k !== 'unstructured'
+    );
+    const contentToParse = hasStructuredCustomInput ? '' : (content || '');
+    const parsedFromContent = contentToParse
+      ? sanitizeAndStructureContent(contentToParse, reqType || reqSubtypeTag || 'artifact', id).attributes
+      : {};
+
+    const targetType = reqType || reqSubtypeTag || (reqAttributes && (reqAttributes.type || reqAttributes.subtypeTag)) || (existingDoc && existingDoc.type) || existingAttrsObj.type || 'artifact';
+    const targetSubtype = reqSubtypeTag || (reqAttributes && reqAttributes.subtypeTag) || (existingDoc && existingDoc.subtypeTag) || existingAttrsObj.subtypeTag || targetType;
+
+    const mergedRaw = {
+      ...existingAttrsObj,
+      ...parsedFromContent,
+      ...(reqAttributes || {}),
+      type: targetType,
+      subtypeTag: targetSubtype
+    };
+    delete mergedRaw.unstructured;
+
+    const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
+    delete normalizedAttrs.unstructured;
+
+    // Explicitly preserve Helix metadata keys if present on mergedRaw
+    for (const metaKey of ['sessionId', 'entries', 'markers', 'activePlayers', 'startedAt', 'endedAt']) {
+      if (Object.prototype.hasOwnProperty.call(mergedRaw, metaKey)) {
+        normalizedAttrs[metaKey] = mergedRaw[metaKey];
+      }
+    }
+
+    let doc = existingDoc;
+    if (!doc) {
+      doc = new Artifact({ projectId: pId, id });
+    }
+    doc.projectId = pId;
+
+    const resolvedTitle = extractString(title || name || (reqAttributes && (reqAttributes.title || reqAttributes.name))) || doc.title || doc.name || id;
+    doc.name = resolvedTitle;
+    doc.title = resolvedTitle;
+    doc.type = targetType;
+    doc.subtypeTag = targetSubtype;
+    doc.content = '';
+
+    if (!doc.attributes) doc.attributes = {};
+    if (doc.attributes && typeof doc.attributes.delete === 'function') {
+      doc.attributes.delete('unstructured');
+    } else if (doc.attributes) {
+      doc.set('attributes.unstructured', undefined);
+    }
+
+    for (const [k, v] of Object.entries(normalizedAttrs)) {
+      if ((v === '' || v === null || v === undefined) && !(k === 'endedAt' && v === null)) {
+        if (doc.attributes && typeof doc.attributes.delete === 'function') {
+          doc.attributes.delete(k);
+        } else {
+          doc.set(`attributes.${k}`, undefined);
+        }
+      } else {
+        if (doc.attributes && typeof doc.attributes.set === 'function') {
+          doc.attributes.set(k, v);
+        } else {
+          doc.set(`attributes.${k}`, v);
+        }
+      }
+    }
+
+    doc.markModified('attributes');
+    doc.lastEdited = new Date();
+    await doc.save();
+
+    const formatted = formatArtifactResponse(doc);
+    res.json({
+      success: true,
+      ...formatted,
+      artifact: formatted
+    });
+  } catch (err) {
+    console.error('Error saving artifact:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+app.post('/api/artifacts', upsertArtifactHandler);
+app.post('/api/artifacts/:id', upsertArtifactHandler);
+app.put('/api/artifacts/:id', upsertArtifactHandler);
+
+app.delete('/api/artifacts/:id', async (req, res) => {
+  const { id } = req.params;
+  const { projectId } = req.query;
+  try {
+    let result;
+    if (projectId) {
+      result = await Artifact.deleteOne({ projectId, id });
+    }
+    if (!result || result.deletedCount === 0) {
+      result = await Artifact.deleteOne({ id });
+    }
+    if (!result || result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    res.json({ success: true, id });
+  } catch (err) {
+    console.error('Error deleting artifact:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1471,7 +1839,12 @@ app.delete('/api/notes/:id', async (req, res) => {
 // Register modular routers
 app.use(require('./prompt'));
 app.use(require('./agentEngine'));
+const { setupHelixEngine } = require('./helixEngine');
+const helixEngine = setupHelixEngine(app, server);
+module.exports.helixEngine = helixEngine;
 
 app.get(/(.*)/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-app.listen(PORT, () => console.log(`Shadow Writer backend listening on port ${PORT}`));
+if (require.main === module) {
+  server.listen(PORT, () => console.log(`Shadow Writer backend listening on port ${PORT}`));
+}
