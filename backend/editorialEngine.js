@@ -8,6 +8,9 @@ const {
   ensureCleanDocumentOnRead,
   sanitizeAttributesObj,
   sanitizeAndStructureContent,
+  constructMarkdownFromAttributes,
+  toStructuredAttrObject,
+  normalizeAttributesToStructuredObjects,
   extractString
 } = require('./mongoDB');
 const {
@@ -18,44 +21,147 @@ const {
 
 const router = express.Router();
 
-function normalizeEditorialHtmlToMarkdown(rawInput) {
+function stripEditorialHtmlToPlainText(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
   let s = rawInput.replace(/\r\n/g, '\n').trim();
   if (!s) return '';
 
-  if (/<div\b|<br\b|<span\b/i.test(s)) {
+  if (/<div\b|<br\b|<span\b|<p\b|<hr\b/i.test(s)) {
     s = s.replace(/<span[^>]*class=["']?[^"'>]*(?:issue-highlight|accepted-flash)[^"'>]*["']?[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+    s = s.replace(/<hr\b[^>]*>/gi, '\n\n');
     s = s.replace(/<div>\s*<br\s*\/?>\s*<\/div>/gi, '\n\n');
     s = s.replace(/<br\s*\/?>/gi, '\n');
     s = s.replace(/<\/div>\s*<div[^>]*>/gi, '\n');
-    s = s.replace(/<\/?div[^>]*>/gi, '');
+    s = s.replace(/<\/p>\s*<p[^>]*>/gi, '\n\n');
+    s = s.replace(/<\/?(?:div|p|span)[^>]*>/gi, '');
     s = s.replace(/&nbsp;/gi, ' ')
          .replace(/&amp;/gi, '&')
          .replace(/&lt;/gi, '<')
          .replace(/&gt;/gi, '>')
          .replace(/&quot;/gi, '"');
   }
-
-  const lines = s.split('\n');
-  const outLines = [];
-  let sceneCount = 0;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const sceneMatch = trimmed.match(/^(?:#+\s*)?((?:Scene|Szene)\s*\d+\b.*)$/i);
-    if (sceneMatch) {
-      sceneCount++;
-      if (sceneCount > 1) {
-        outLines.push('\n***\n');
-      }
-      outLines.push(`# ${sceneMatch[1].replace(/^#+\s*/, '').trim()}`);
-    } else {
-      outLines.push(line);
-    }
-  }
-  return outLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-async function upsertChapterRecord(pId, id, { name, content, attributes: reqAttributes, clearPendingDiff } = {}) {
+function parseStructuredEditorialInput(rawInput, existingScenes = null) {
+  if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+    if (rawInput.manuscript || rawInput.scenes) {
+      const mObj = toStructuredAttrObject(rawInput.manuscript || rawInput.text || rawInput.html || '');
+      const sObj = (rawInput.scenes && typeof rawInput.scenes === 'object') ? rawInput.scenes : {};
+      const sceneAttrs = {};
+      for (const [sKey, sVal] of Object.entries(sObj)) {
+        if (sVal && typeof sVal === 'object' && sVal.beats) {
+          const beatTexts = Object.values(sVal.beats).map(b => (b && (b.text || b.html)) || '').filter(Boolean);
+          const joined = beatTexts.join('\n\n');
+          sceneAttrs[sKey] = toStructuredAttrObject(joined);
+        }
+      }
+      if (Object.keys(sObj).length > 0) {
+        return { manuscript: mObj, scenes: sObj, sceneAttributes: sceneAttrs };
+      }
+      return parseStructuredEditorialInput(mObj.text || mObj.html || '', existingScenes);
+    }
+    rawInput = rawInput.text || rawInput.html || '';
+  }
+
+  let plain = stripEditorialHtmlToPlainText(String(rawInput || ''));
+  if (!plain && existingScenes && typeof existingScenes === 'object' && Object.keys(existingScenes).length > 0) {
+    const scenesPlain = existingScenes instanceof Map ? Object.fromEntries(existingScenes) : existingScenes;
+    const allSceneTexts = [];
+    const sceneAttributes = {};
+    for (const [sId, sRaw] of Object.entries(scenesPlain)) {
+      const sData = sRaw instanceof Map ? Object.fromEntries(sRaw) : (sRaw || {});
+      const bObj = sData.beats instanceof Map ? Object.fromEntries(sData.beats) : (sData.beats || {});
+      const beatTexts = Object.values(bObj).map(b => (b && (b.text || b.html)) || '').filter(Boolean);
+      const joined = beatTexts.join('\n\n');
+      if (joined) {
+        allSceneTexts.push(joined);
+        sceneAttributes[sId] = toStructuredAttrObject(joined);
+      }
+    }
+    const fullText = allSceneTexts.join('\n\n');
+    return {
+      manuscript: toStructuredAttrObject(fullText),
+      scenes: scenesPlain,
+      sceneAttributes
+    };
+  }
+
+  // Parse scenes & beats without keeping Markdown # headings or *** dividers in prose
+  const lines = plain.split('\n');
+  const rawScenes = [];
+  let currentTitle = 'Scene 1';
+  let currentLines = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^(?:\*\*\*|---|_{3,})$/.test(trimmed)) {
+      if (currentLines.join('\n').trim()) {
+        rawScenes.push({ title: currentTitle, body: currentLines.join('\n').trim() });
+        currentLines = [];
+        currentTitle = `Scene ${rawScenes.length + 1}`;
+      }
+      continue;
+    }
+    const sceneMatch = trimmed.match(/^(?:#+\s*)?((?:Scene|Szene)\s*\d+\b.*)$/i);
+    if (sceneMatch) {
+      if (currentLines.join('\n').trim()) {
+        rawScenes.push({ title: currentTitle, body: currentLines.join('\n').trim() });
+        currentLines = [];
+      }
+      currentTitle = sceneMatch[1].replace(/^#+\s*/, '').trim();
+      continue;
+    }
+    // Strip leading Chapter H1/H2 if duplicated at very top of prose
+    if (rawScenes.length === 0 && currentLines.length === 0 && /^#+\s*(?:Kapitel|Chapter)\s*\d+/i.test(trimmed)) {
+      continue;
+    }
+    currentLines.push(line);
+  }
+  if (currentLines.join('\n').trim()) {
+    rawScenes.push({ title: currentTitle, body: currentLines.join('\n').trim() });
+  }
+
+  const scenes = {};
+  const sceneAttributes = {};
+  const sceneProseBlocks = [];
+
+  rawScenes.forEach((sc, idx) => {
+    const sceneKey = `scene_${idx + 1}`;
+    const bodyText = sc.body.trim();
+    if (!bodyText) return;
+    const paragraphs = bodyText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+    const beats = {};
+    paragraphs.forEach((p, bIdx) => {
+      const beatKey = `beat_${bIdx + 1}`;
+      beats[beatKey] = { id: beatKey, text: p, html: p };
+    });
+    if (Object.keys(beats).length === 0) {
+      beats.beat_1 = { id: 'beat_1', text: bodyText, html: bodyText };
+    }
+    scenes[sceneKey] = {
+      id: sceneKey,
+      title: sc.title || `Scene ${idx + 1}`,
+      beats
+    };
+    sceneAttributes[sceneKey] = toStructuredAttrObject(bodyText);
+    sceneProseBlocks.push(bodyText);
+  });
+
+  const cleanManuscriptText = sceneProseBlocks.join('\n\n').trim();
+  return {
+    manuscript: toStructuredAttrObject(cleanManuscriptText),
+    scenes,
+    sceneAttributes
+  };
+}
+
+function normalizeEditorialHtmlToMarkdown(rawInput) {
+  const parsed = parseStructuredEditorialInput(rawInput);
+  return parsed.manuscript.text;
+}
+
+async function upsertChapterRecord(pId, id, { name, content, manuscript, scenes: reqScenes, attributes: reqAttributes, clearPendingDiff } = {}) {
   const match = String(id).match(/\d+/);
   const orderIndex = match ? parseInt(match[0], 10) : 999;
 
@@ -65,81 +171,29 @@ async function upsertChapterRecord(pId, id, { name, content, attributes: reqAttr
     updateData.name = extractString(name || reqAttributes.name);
   }
 
-  if (content) {
-    const normalizedMd = normalizeEditorialHtmlToMarkdown(content);
-    const { attributes, cleanContent } = sanitizeAndStructureContent(normalizedMd, 'chapter', id);
-    attributes.type = 'chapters';
-    attributes.subtypeTag = 'chapters';
-    if (reqAttributes && Object.keys(reqAttributes).length > 0) {
-      const cleanedReqAttrs = { ...reqAttributes };
-      delete cleanedReqAttrs.name;
-      Object.assign(attributes, cleanedReqAttrs);
-      if (reqAttributes.name && !updateData.name) {
-        updateData.name = extractString(reqAttributes.name);
-      }
+  const rawProseSource = manuscript || content || (reqAttributes && (reqAttributes.description || reqAttributes.manuscript));
+  if (rawProseSource || (reqScenes && Object.keys(reqScenes).length > 0) || (reqAttributes && Object.keys(reqAttributes).length > 0)) {
+    const parsed = parseStructuredEditorialInput(rawProseSource || '', reqScenes);
+    const mergedRawAttrs = {
+      ...(reqAttributes || {}),
+      ...parsed.sceneAttributes
+    };
+    if (parsed.manuscript && parsed.manuscript.text) {
+      mergedRawAttrs.description = parsed.manuscript;
     }
-    if (cleanContent) {
-      attributes.unstructured = cleanContent;
+    if (reqAttributes && reqAttributes.name && !updateData.name) {
+      updateData.name = extractString(reqAttributes.name);
     }
 
-    const scenesData = {};
-    if (cleanContent) {
-      const generateId = () => crypto.randomBytes(4).toString('hex');
-      const sceneTokens = cleanContent.split(/(<hr\b[^>]*class=["']?[^"'>]*scene-break[^"'>]*["']?[^>]*>|<p>\s*\*\*\*\s*<\/p>|<div>\s*\*\*\*\s*<\/div>|\n\s*\*\*\*\s*\n)/i);
+    const structuredAttrs = normalizeAttributesToStructuredObjects(mergedRawAttrs, 'chapters');
+    structuredAttrs.type = 'chapters';
+    structuredAttrs.subtypeTag = 'chapters';
 
-      let currentSceneId = `scene-${generateId()}`;
-      const currentSceneText = sceneTokens[0] || '';
-      const stripHtml = (html) => html.replace(/<[^>]*>?/gm, '').trim();
-
-      const parseBeats = (sceneText) => {
-        const beatTokens = sceneText.split(/(<hr\b[^>]*class=["']?[^"'>]*beat-break[^"'>]*["']?[^>]*>|<p>\s*---\s*<\/p>|<div>\s*---\s*<\/div>|\n\s*---\s*\n)/i);
-        const beats = {};
-        let currentBeatId = `beat-${generateId()}`;
-        const currentBeatText = beatTokens[0] || '';
-
-        if (currentBeatText.trim().length > 0) {
-          beats[currentBeatId] = { id: currentBeatId, text: stripHtml(currentBeatText), html: currentBeatText.trim() };
-        }
-
-        for (let i = 1; i < beatTokens.length; i += 2) {
-          const sep = beatTokens[i];
-          const nextText = beatTokens[i + 1] || '';
-          const idMatch = sep.match(/id=["']([^"']+)["']/i);
-          currentBeatId = idMatch ? idMatch[1] : `beat-${generateId()}`;
-
-          if (nextText.trim().length > 0) {
-            beats[currentBeatId] = { id: currentBeatId, text: stripHtml(nextText), html: nextText.trim() };
-          }
-        }
-        return beats;
-      };
-
-      if (currentSceneText.trim().length > 0) {
-        const parsedBeats = parseBeats(currentSceneText);
-        if (Object.keys(parsedBeats).length > 0) {
-          scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-        }
-      }
-
-      for (let i = 1; i < sceneTokens.length; i += 2) {
-        const sep = sceneTokens[i];
-        const nextText = sceneTokens[i + 1] || '';
-
-        const idMatch = sep.match(/id=["']([^"']+)["']/i);
-        currentSceneId = idMatch ? idMatch[1] : `scene-${generateId()}`;
-
-        if (nextText.trim().length > 0) {
-          const parsedBeats = parseBeats(nextText);
-          if (Object.keys(parsedBeats).length > 0) {
-            scenesData[currentSceneId] = { id: currentSceneId, beats: parsedBeats };
-          }
-        }
-      }
+    if (Object.keys(parsed.scenes).length > 0) {
+      updateData.scenes = parsed.scenes;
     }
-
-    updateData.scenes = scenesData;
     updateData.content = '';
-    updateData.attributes = attributes;
+    updateData.attributes = structuredAttrs;
   }
 
   if (clearPendingDiff) {
@@ -153,25 +207,14 @@ async function upsertChapterRecord(pId, id, { name, content, attributes: reqAttr
   );
 }
 
-function reconstructChapterMarkdown(chapterDoc, chapAttrs) {
-  if (!chapterDoc) return '';
-  if (chapterDoc.content && String(chapterDoc.content).trim()) {
-    return String(chapterDoc.content).trim();
-  }
-  if (chapAttrs && chapAttrs.unstructured && String(chapAttrs.unstructured).trim()) {
-    return String(chapAttrs.unstructured).trim();
-  }
-  if (chapAttrs && chapAttrs.description) {
-    const desc = chapAttrs.description;
-    const descText = typeof desc === 'object' ? (desc.text || desc.html || '') : String(desc);
-    if (descText.trim()) return descText.trim();
-  }
-  if (chapterDoc.scenes) {
+function reconstructChapterProse(chapterDoc, chapAttrs, { asMarkdown = false } = {}) {
+  if (!chapterDoc && !chapAttrs) return '';
+  if (chapterDoc && chapterDoc.scenes) {
     const scenesObj = chapterDoc.scenes instanceof Map ? Object.fromEntries(chapterDoc.scenes) : chapterDoc.scenes;
     const sceneIds = Object.keys(scenesObj || {});
     if (sceneIds.length > 0) {
       const sceneParts = [];
-      for (const sId of sceneIds) {
+      sceneIds.forEach((sId, idx) => {
         const sRaw = scenesObj[sId];
         const sData = sRaw instanceof Map ? Object.fromEntries(sRaw) : (sRaw || {});
         const bRaw = sData.beats || {};
@@ -181,12 +224,30 @@ function reconstructChapterMarkdown(chapterDoc, chapAttrs) {
           const bVal = bObj[bId] || {};
           beatParts.push(bVal.text || bVal.html || '');
         }
-        sceneParts.push(beatParts.filter(Boolean).join('\n\n'));
-      }
-      return sceneParts.filter(Boolean).join('\n\n***\n\n').trim();
+        const joinedBeats = beatParts.filter(Boolean).join('\n\n');
+        if (!joinedBeats) return;
+        if (asMarkdown) {
+          const sTitle = sData.title || `Scene ${idx + 1}`;
+          sceneParts.push(`## ${sTitle}\n\n${joinedBeats}`);
+        } else {
+          sceneParts.push(joinedBeats);
+        }
+      });
+      return sceneParts.filter(Boolean).join(asMarkdown ? '\n\n***\n\n' : '\n\n').trim();
     }
   }
+  if (chapAttrs && chapAttrs.description) {
+    const descText = extractString(chapAttrs.description).trim();
+    if (descText) return descText;
+  }
+  if (chapterDoc && chapterDoc.content && String(chapterDoc.content).trim()) {
+    return stripEditorialHtmlToPlainText(String(chapterDoc.content));
+  }
   return '';
+}
+
+function reconstructChapterMarkdown(chapterDoc, chapAttrs) {
+  return reconstructChapterProse(chapterDoc, chapAttrs, { asMarkdown: false });
 }
 
 function slugifyChapterHeading(heading) {
@@ -208,16 +269,19 @@ function slugifyChapterHeading(heading) {
 async function persistEditorialSession(pId, cleanChapterId, {
   title,
   content,
+  manuscript: reqManuscript,
+  scenes: reqScenes,
   currentPhase = '1. Logik',
   suggestions = [],
   stats = null,
   existingAttrs = {},
   extraAttributes = {},
-  legacyRawHtml = null,
   syncChapter = true
 } = {}) {
   const sessionId = `editorial-session-${cleanChapterId}`;
-  const cleanMd = normalizeEditorialHtmlToMarkdown(content || '');
+  const rawInput = reqManuscript || content || existingAttrs.manuscript || '';
+  const parsed = parseStructuredEditorialInput(rawInput, reqScenes || existingAttrs.scenes);
+  const cleanProse = parsed.manuscript.text;
   const resolvedTitle = title || existingAttrs.title || cleanChapterId;
   const resolvedSuggestions = Array.isArray(suggestions) ? suggestions : [];
 
@@ -233,9 +297,17 @@ async function persistEditorialSession(pId, cleanChapterId, {
   const open = Number(rawStats.open !== undefined ? rawStats.open : Math.max(0, total - accepted - rejected));
   const normalizedStats = { total, accepted, rejected, open };
 
+  const cleanedExisting = { ...existingAttrs };
+  delete cleanedExisting.unstructured;
+  delete cleanedExisting.legacyRawHtml;
+
+  const cleanedExtra = { ...extraAttributes };
+  delete cleanedExtra.unstructured;
+  delete cleanedExtra.legacyRawHtml;
+
   const mergedAttrs = {
-    ...existingAttrs,
-    ...extraAttributes,
+    ...cleanedExisting,
+    ...cleanedExtra,
     type: 'editorial_session',
     subtypeTag: 'editorial_session',
     chapterId: cleanChapterId,
@@ -243,11 +315,9 @@ async function persistEditorialSession(pId, cleanChapterId, {
     currentPhase,
     suggestions: resolvedSuggestions,
     stats: normalizedStats,
-    unstructured: cleanMd
+    manuscript: parsed.manuscript,
+    scenes: parsed.scenes
   };
-  if (legacyRawHtml) {
-    mergedAttrs.legacyRawHtml = legacyRawHtml;
-  }
 
   const savedArtifact = await Artifact.findOneAndUpdate(
     { projectId: pId, id: sessionId },
@@ -257,7 +327,7 @@ async function persistEditorialSession(pId, cleanChapterId, {
         id: sessionId,
         name: resolvedTitle,
         type: 'editorial_session',
-        content: cleanMd,
+        content: '',
         attributes: mergedAttrs,
         lastEdited: new Date()
       }
@@ -265,14 +335,17 @@ async function persistEditorialSession(pId, cleanChapterId, {
     { upsert: true, new: true }
   );
 
-  if (cleanMd && syncChapter !== false) {
+  if (cleanProse && syncChapter !== false) {
     await upsertChapterRecord(pId, cleanChapterId, {
       name: resolvedTitle,
-      content: cleanMd,
+      manuscript: parsed.manuscript,
+      scenes: parsed.scenes,
       attributes: {
         type: 'chapters',
         subtypeTag: 'chapters',
-        editorialPhase: currentPhase
+        editorialPhase: currentPhase,
+        description: parsed.manuscript,
+        ...parsed.sceneAttributes
       }
     });
   }
@@ -283,12 +356,30 @@ async function persistEditorialSession(pId, cleanChapterId, {
     chapterId: cleanChapterId,
     title: resolvedTitle,
     type: 'editorial_session',
-    content: cleanMd,
+    content: cleanProse,
+    manuscript: parsed.manuscript,
+    scenes: parsed.scenes,
     currentPhase,
     suggestions: resolvedSuggestions,
     stats: normalizedStats,
+    attributes: mergedAttrs,
     lastEdited: savedArtifact.lastEdited
   };
+}
+
+function extractNoteFullText(doc, attrs) {
+  if (!doc && !attrs) return '';
+  const a = attrs || (doc ? sanitizeAttributesObj(doc.attributes) : {});
+  const constructed = constructMarkdownFromAttributes(doc ? (doc.name || doc.id) : 'Document', doc ? doc.type : a.type, a);
+  if (constructed) return constructed;
+  const parts = [];
+  for (const [k, v] of Object.entries(a)) {
+    if (['type', 'subtypeTag', 'sourceDriveDocId', 'editorialPhase', 'chapterId', 'title', 'currentPhase', 'suggestions', 'stats', 'scenes'].includes(k)) continue;
+    const s = extractString(v).trim();
+    if (s) parts.push(s);
+  }
+  if (parts.length > 0) return parts.join('\n\n');
+  return (doc && doc.content) || '';
 }
 
 async function loadEditorialProjectContext(projectId) {
@@ -307,7 +398,7 @@ async function loadEditorialProjectContext(projectId) {
   if (dossierDoc) {
     const cleaned = await ensureCleanDocumentOnRead(dossierDoc, 'note');
     const attrs = sanitizeAttributesObj(cleaned.attributes);
-    masterplanText = cleaned.content || attrs.unstructured || '';
+    masterplanText = extractNoteFullText(cleaned, attrs);
   }
 
   // 2. Outline ('outline' Note)
@@ -323,7 +414,7 @@ async function loadEditorialProjectContext(projectId) {
   if (outlineDoc) {
     const cleaned = await ensureCleanDocumentOnRead(outlineDoc, 'note');
     const attrs = sanitizeAttributesObj(cleaned.attributes);
-    outlineText = cleaned.content || attrs.unstructured || '';
+    outlineText = extractNoteFullText(cleaned, attrs);
   }
 
   // 3. Characters ('Character' collection)
@@ -332,7 +423,7 @@ async function loadEditorialProjectContext(projectId) {
   for (const ch of charList) {
     const cleaned = await ensureCleanDocumentOnRead(ch, 'character');
     const attrs = sanitizeAttributesObj(cleaned.attributes);
-    const body = cleaned.content || attrs.unstructured || '';
+    const body = extractNoteFullText(cleaned, attrs);
     charBlocks.push(`### ${cleaned.name || cleaned.id}\n${body}`);
   }
   const charactersText = charBlocks.join('\n\n');
@@ -547,10 +638,27 @@ router.get('/api/editor/chapters/:projectId', async (req, res) => {
     for (const oNote of outlineNotes) {
       const cleanedOutline = await ensureCleanDocumentOnRead(oNote, 'note');
       const oAttrs = sanitizeAttributesObj(cleanedOutline.attributes) || {};
-      const outlineText = cleanedOutline.content
-        || oAttrs.unstructured
-        || (oAttrs.description && (oAttrs.description.text || oAttrs.description.html))
-        || '';
+      const attrLines = [];
+      for (const [k, v] of Object.entries(oAttrs)) {
+        if (['type', 'subtypeTag', 'sourceDriveDocId'].includes(k)) continue;
+        const valStr = extractString(v).trim();
+        if (/^(kapitel|chapter|band)_\d+/i.test(k)) {
+          const firstLine = (valStr.split('\n')[0] || '').trim();
+          const numMatch = k.match(/\d+/);
+          const prefix = numMatch ? `Kapitel ${numMatch[0]}` : k.replace(/_/g, ' ');
+          if (/^(Kapitel|Chapter|Band)\s*\d+/i.test(firstLine)) {
+            attrLines.push(firstLine);
+          } else if (firstLine) {
+            attrLines.push(`${prefix}: ${firstLine}`);
+          } else {
+            attrLines.push(prefix);
+          }
+        }
+        if (valStr) {
+          attrLines.push(valStr);
+        }
+      }
+      const outlineText = [cleanedOutline.content || '', ...attrLines].filter(Boolean).join('\n');
       if (!outlineText) continue;
 
       const lines = String(outlineText)
@@ -610,15 +718,20 @@ router.get('/api/editor/session/:projectId/:chapterId', async (req, res) => {
     const artAttrs = artifact ? sanitizeAttributesObj(artifact.attributes) : {};
     const chapAttrs = chapter ? sanitizeAttributesObj(chapter.attributes) : {};
 
-    const chapterMd = reconstructChapterMarkdown(chapter, chapAttrs);
-    const content = (artifact && artifact.content)
-      || artAttrs.unstructured
-      || chapterMd
+    const chapterProse = reconstructChapterProse(chapter, chapAttrs, { asMarkdown: false });
+    const artManuscriptText = extractString(artAttrs.manuscript).trim();
+    const rawContent = artManuscriptText
+      || chapterProse
+      || (artifact && artifact.content)
       || '';
+    const existingScenes = artAttrs.scenes
+      || (chapter && chapter.scenes ? (chapter.scenes instanceof Map ? Object.fromEntries(chapter.scenes) : chapter.scenes) : null);
+    const parsed = parseStructuredEditorialInput(rawContent, existingScenes);
+
     const title = (artifact && artifact.name)
       || artAttrs.title
       || (chapter && chapter.name)
-      || chapAttrs.title
+      || extractString(chapAttrs.title)
       || cleanChapterId;
     const currentPhase = artAttrs.currentPhase || artAttrs.current_step || chapAttrs.editorialPhase || '1. Logik';
     const suggestions = Array.isArray(artAttrs.suggestions) ? artAttrs.suggestions : [];
@@ -631,17 +744,27 @@ router.get('/api/editor/session/:projectId/:chapterId', async (req, res) => {
         }
       : { total: suggestions.length, accepted: 0, rejected: 0, open: suggestions.length };
 
+    const cleanArtAttrs = {
+      ...artAttrs,
+      manuscript: parsed.manuscript,
+      scenes: parsed.scenes
+    };
+    delete cleanArtAttrs.unstructured;
+    delete cleanArtAttrs.legacyRawHtml;
+
     const sessionObj = {
       id: sessionId,
       projectId: pId,
       chapterId: cleanChapterId,
       title,
       type: 'editorial_session',
-      content,
+      content: parsed.manuscript.text,
+      manuscript: parsed.manuscript,
+      scenes: parsed.scenes,
       currentPhase,
       suggestions,
       stats,
-      attributes: artAttrs,
+      attributes: cleanArtAttrs,
       lastEdited: artifact ? artifact.lastEdited : (chapter ? chapter.lastEdited : new Date())
     };
     res.json({
@@ -651,6 +774,29 @@ router.get('/api/editor/session/:projectId/:chapterId', async (req, res) => {
   } catch (err) {
     console.error('Error loading editorial session:', err);
     res.status(500).json({ error: 'Failed to load editorial session' });
+  }
+});
+
+router.get('/api/editor/export-markdown/:projectId/:chapterId', async (req, res) => {
+  const { projectId, chapterId } = req.params;
+  const pId = projectId || 'global';
+  const cleanChapterId = chapterId.replace(/^editorial-session-/, '');
+
+  try {
+    const chapter = await Chapter.findOne({ projectId: pId, id: cleanChapterId });
+    const chapAttrs = chapter ? sanitizeAttributesObj(chapter.attributes) : {};
+    const title = (chapter && chapter.name) || cleanChapterId;
+    const mdBody = reconstructChapterProse(chapter, chapAttrs, { asMarkdown: true });
+    const fullMarkdown = `# ${title}\n\n${mdBody}`.trim();
+    res.json({
+      projectId: pId,
+      chapterId: cleanChapterId,
+      title,
+      markdown: fullMarkdown
+    });
+  } catch (err) {
+    console.error('Error exporting chapter markdown:', err);
+    res.status(500).json({ error: 'Failed to export chapter markdown' });
   }
 });
 
@@ -665,28 +811,28 @@ const saveEditorialSessionHandler = async (req, res) => {
     const existingAttrs = existing ? sanitizeAttributesObj(existing.attributes) : {};
 
     const body = req.body || {};
-    const rawContent = body.content !== undefined
-      ? body.content
-      : (body.current_text !== undefined ? body.current_text : (existing ? existing.content : ''));
+    const rawContent = body.manuscript !== undefined
+      ? body.manuscript
+      : (body.content !== undefined
+          ? body.content
+          : (body.current_text !== undefined ? body.current_text : (existingAttrs.manuscript || (existing ? existing.content : ''))));
 
     const title = body.title || body.name || existingAttrs.title || (existing && existing.name) || cleanChapterId;
     const currentPhase = body.currentPhase || body.current_step || existingAttrs.currentPhase || '1. Logik';
     const suggestions = Array.isArray(body.suggestions)
       ? body.suggestions
       : (Array.isArray(existingAttrs.suggestions) ? existingAttrs.suggestions : []);
-    const legacyRawHtml = (body.current_text && /<div\b|<span\b/i.test(body.current_text))
-      ? body.current_text
-      : null;
 
     const session = await persistEditorialSession(pId, cleanChapterId, {
       title,
       content: rawContent,
+      manuscript: body.manuscript,
+      scenes: body.scenes || existingAttrs.scenes,
       currentPhase,
       suggestions,
       stats: body.stats || existingAttrs.stats,
       existingAttrs,
       extraAttributes: body.attributes || {},
-      legacyRawHtml,
       syncChapter: body.syncChapter !== false
     });
 
@@ -725,11 +871,11 @@ router.post('/api/editor/apply', async (req, res) => {
     const existingAttrs = existing ? sanitizeAttributesObj(existing.attributes) : {};
     const chapAttrs = chapter ? sanitizeAttributesObj(chapter.attributes) : {};
 
-    let content = (existing && existing.content)
-      || existingAttrs.unstructured
-      || reconstructChapterMarkdown(chapter, chapAttrs)
+    let content = extractString(existingAttrs.manuscript).trim()
+      || reconstructChapterProse(chapter, chapAttrs, { asMarkdown: false })
+      || (existing && existing.content)
       || '';
-    content = normalizeEditorialHtmlToMarkdown(content);
+    content = stripEditorialHtmlToPlainText(content);
 
     const title = existingAttrs.title || (existing && existing.name) || (chapter && chapter.name) || cleanChapterId;
     const currentPhase = existingAttrs.currentPhase || existingAttrs.current_step || '1. Logik';
@@ -815,11 +961,12 @@ router.post('/api/editor/analyze', async (req, res) => {
 
     const rawText = reqText !== undefined && reqText !== null
       ? String(reqText)
-      : ((existing && existing.content)
-          || existingAttrs.unstructured
-          || reconstructChapterMarkdown(chapter, chapAttrs)
+      : (extractString(existingAttrs.manuscript).trim()
+          || reconstructChapterProse(chapter, chapAttrs, { asMarkdown: false })
+          || (existing && existing.content)
           || '');
-    const manuscriptText = normalizeEditorialHtmlToMarkdown(rawText);
+    const parsedInput = parseStructuredEditorialInput(rawText, existingAttrs.scenes);
+    const manuscriptText = parsedInput.manuscript.text;
 
     if (!manuscriptText.trim()) {
       return res.status(400).json({ error: 'Manuscript text is empty; nothing to analyze.' });
@@ -888,7 +1035,8 @@ Antworte NUR als Array mit exakt dieser Struktur: [{"id": "einzigartige_id", "ty
 
     const sessionPayload = await persistEditorialSession(pId, cleanChapterId, {
       title,
-      content: manuscriptText,
+      manuscript: parsedInput.manuscript,
+      scenes: parsedInput.scenes,
       currentPhase: phase,
       suggestions,
       stats,
@@ -960,8 +1108,11 @@ router.post('/api/editor/inline-edit', async (req, res) => {
 
 module.exports = {
   router,
+  stripEditorialHtmlToPlainText,
+  parseStructuredEditorialInput,
   normalizeEditorialHtmlToMarkdown,
   upsertChapterRecord,
+  reconstructChapterProse,
   reconstructChapterMarkdown,
   slugifyChapterHeading,
   persistEditorialSession,

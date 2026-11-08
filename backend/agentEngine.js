@@ -24,6 +24,19 @@ async function resolveContextData(projectId, contextList) {
   if (!contextList || contextList.length === 0) return '';
   let contextStr = '';
 
+  const { constructMarkdownFromAttributes, sanitizeAttributesObj, extractString } = require('./mongoDB');
+  const { reconstructChapterProse } = require('./editorialEngine');
+  const formatDocForPrompt = (doc, fallbackType) => {
+    if (!doc) return '';
+    const attrs = sanitizeAttributesObj(doc.attributes);
+    if (fallbackType === 'chapter') {
+      return reconstructChapterProse(doc, attrs, { asMarkdown: true }) || doc.content || '';
+    }
+    return constructMarkdownFromAttributes(doc.name || doc.id, doc.type || fallbackType, attrs)
+      || doc.content
+      || Object.values(attrs).map(v => extractString(v)).filter(Boolean).join('\n\n');
+  };
+
   const project = await Project.findOne({ id: projectId }).lean();
   
   for (const ctx of contextList) {
@@ -33,35 +46,35 @@ async function resolveContextData(projectId, contextList) {
     else if (ctx === 'chapters') {
       const chapters = await Chapter.find({ projectId }).sort({ orderIndex: 1 }).lean();
       if (chapters.length > 0) {
-        contextStr += '\n[Project Chapters]\n' + chapters.map(c => `--- Chapter: ${c.id} ---\n${c.content}`).join('\n\n') + '\n';
+        contextStr += '\n[Project Chapters]\n' + chapters.map(c => `--- Chapter: ${c.id} ---\n${formatDocForPrompt(c, 'chapter')}`).join('\n\n') + '\n';
       }
     }
     else if (ctx === 'characters') {
       const characters = await Character.find({ projectId }).lean();
       if (characters.length > 0) {
-        contextStr += '\n[Character Profiles]\n' + characters.map(c => `--- Character: ${c.name || c.id} ---\n${c.content}`).join('\n\n') + '\n';
+        contextStr += '\n[Character Profiles]\n' + characters.map(c => `--- Character: ${c.name || c.id} ---\n${formatDocForPrompt(c, 'character')}`).join('\n\n') + '\n';
       }
     }
     else if (ctx === 'notes') {
       const notes = await Note.find({ projectId }).lean();
       if (notes.length > 0) {
-        contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${n.content}`).join('\n\n') + '\n';
+        contextStr += '\n[Project Notes & Outlines]\n' + notes.map(n => `--- Note: ${n.name || n.id} ---\n${formatDocForPrompt(n, 'note')}`).join('\n\n') + '\n';
       }
       const artifacts = await Artifact.find({ projectId }).lean();
       if (artifacts.length > 0) {
-        contextStr += '\n[Project Artifacts]\n' + artifacts.map(a => `--- Artifact: ${a.name || a.id} ---\n${a.content}`).join('\n\n') + '\n';
+        contextStr += '\n[Project Artifacts]\n' + artifacts.map(a => `--- Artifact: ${a.name || a.id} ---\n${formatDocForPrompt(a, 'artifact')}`).join('\n\n') + '\n';
       }
     }
     else if (ctx === 'dossier') {
       const dossierNote = await Note.findOne({ projectId, id: 'dossier' }).lean();
       if (dossierNote) {
-        contextStr += `\n[Project Dossier]\n${dossierNote.content}\n`;
+        contextStr += `\n[Project Dossier]\n${formatDocForPrompt(dossierNote, 'dossier')}\n`;
       } else {
         const dossierNotes = await Note.find({ projectId, id: /dossier/i }).lean();
         const dossierArtifacts = await Artifact.find({ projectId, id: /dossier/i }).lean();
         const allDossiers = [...dossierNotes, ...dossierArtifacts];
         if (allDossiers.length > 0) {
-          contextStr += '\n[Project Dossier]\n' + allDossiers.map(d => d.content).join('\n\n') + '\n';
+          contextStr += '\n[Project Dossier]\n' + allDossiers.map(d => formatDocForPrompt(d, 'dossier')).join('\n\n') + '\n';
         }
       }
     }
@@ -84,52 +97,35 @@ async function resolveContextData(projectId, contextList) {
 
 async function saveArtifact(projectId, type, id, content, orderIndex = null) {
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes } = require('./mongoDB');
+    const { sanitizeAndStructureContent, normalizeAttributesToStructuredObjects } = require('./mongoDB');
+    const { upsertChapterRecord } = require('./editorialEngine');
     let { id: normId, type: normType, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(content, type, id);
 
     const targetType = attributes.type || normType;
-    if (typeof constructMarkdownFromAttributes === 'function') {
-      const reconstructed = constructMarkdownFromAttributes(normName, targetType, attributes);
-      if (reconstructed) cleanContent = reconstructed;
-    }
+    const structuredAttrs = normalizeAttributesToStructuredObjects(attributes, targetType);
 
     if (normType === 'chapter') {
-      const existingChap = await Chapter.findOne({ projectId, id: normId });
-      if (existingChap && existingChap.content && existingChap.content.trim().length > 0) {
-        const pendingDiff = {
-          prePromptContent: existingChap.content,
-          newDocText: cleanContent,
-          userPrompt: 'Chapter rewrite via Pipeline',
-          timestamp: new Date()
-        };
-        await Chapter.findOneAndUpdate(
-          { projectId, id: normId },
-          { pendingDiff, attributes, lastEdited: new Date() }
-        );
-        console.log(`[agentEngine] Existing chapter '${normId}' rewritten. Saved as Pending Review artifact.`);
-      } else {
-        await Chapter.findOneAndUpdate(
-          { projectId, id: normId },
-          { content: cleanContent, pendingDiff: null, attributes, orderIndex: orderIndex !== null ? orderIndex : 999, lastEdited: new Date() },
-          { upsert: true }
-        );
-      }
+      await upsertChapterRecord(projectId, normId, {
+        name: normName,
+        content: cleanContent,
+        attributes: structuredAttrs
+      });
     } else if (normType === 'character') {
       await Character.findOneAndUpdate(
         { projectId, id: normId },
-        { name: normName, content: cleanContent, attributes, lastEdited: new Date() },
+        { name: normName, content: '', attributes: structuredAttrs, lastEdited: new Date() },
         { upsert: true }
       );
     } else if (normType === 'artifact') {
       await Artifact.findOneAndUpdate(
         { projectId, id: normId },
-        { name: normName, type: 'artifact', content: cleanContent, attributes, lastEdited: new Date() },
+        { name: normName, type: 'artifact', content: '', attributes: structuredAttrs, lastEdited: new Date() },
         { upsert: true }
       );
     } else {
       await Note.findOneAndUpdate(
         { projectId, id: normId },
-        { name: normName, type: targetType || 'note', content: cleanContent, attributes, lastEdited: new Date() },
+        { name: normName, type: targetType || 'note', content: '', attributes: structuredAttrs, lastEdited: new Date() },
         { upsert: true }
       );
     }

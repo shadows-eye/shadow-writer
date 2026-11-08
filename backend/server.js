@@ -115,15 +115,27 @@ app.get('/api/project-status', async (req, res) => {
 
     let chapters = [];
     if (hasOutline) {
-      const outlineUnstruct = outlineNote && outlineNote.attributes
-        ? (typeof outlineNote.attributes.get === 'function' ? outlineNote.attributes.get('unstructured') : outlineNote.attributes.unstructured)
-        : '';
-      const outlineContent = (outlineNote ? (outlineNote.content || outlineUnstruct) : (outlineFile ? outlineFile.content : '')) || '';
+      const { sanitizeAttributesObj, extractString } = require('./mongoDB');
+      const outlineAttrs = outlineNote && outlineNote.attributes ? sanitizeAttributesObj(outlineNote.attributes) : {};
+      const chaptersSet = new Set();
+      const attrParts = [];
+      for (const [k, v] of Object.entries(outlineAttrs)) {
+        const keyChapMatch = k.match(/^(?:kapitel|chapter|band)_(\d+)/i);
+        if (keyChapMatch) {
+          chaptersSet.add(parseInt(keyChapMatch[1], 10));
+        }
+        const s = extractString(v).trim();
+        if (s) attrParts.push(s);
+      }
+      const outlineContent = [
+        outlineNote ? (outlineNote.content || '') : '',
+        outlineFile ? (outlineFile.content || '') : '',
+        ...attrParts
+      ].filter(Boolean).join('\n');
       const chapterRegex = /^\s*#*\s*(?:Chapter|Kapitel|Band)\s+(\d+)/gmi;
       let match;
-      const chaptersSet = new Set();
       while ((match = chapterRegex.exec(outlineContent)) !== null) {
-        chaptersSet.add(parseInt(match[1]));
+        chaptersSet.add(parseInt(match[1], 10));
       }
       chapters = Array.from(chaptersSet).sort((a, b) => a - b);
     }
@@ -475,15 +487,19 @@ app.get('/api/projects/:projectId/export', async (req, res) => {
     const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
 
     const docChildren = [];
+    const { reconstructChapterProse } = require('./editorialEngine');
+    const { sanitizeAttributesObj } = require('./mongoDB');
     for (const chap of chapters) {
-      const titleText = chap.id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const titleText = chap.name || chap.id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       docChildren.push(new Paragraph({
         text: titleText,
         heading: HeadingLevel.HEADING_1,
         spacing: { before: 400, after: 200 }
       }));
 
-      const lines = (chap.content || '').split(/\n\n+/);
+      const chapAttrs = sanitizeAttributesObj(chap.attributes);
+      const chapText = reconstructChapterProse(chap, chapAttrs, { asMarkdown: false }) || chap.content || '';
+      const lines = chapText.split(/\n\n+/);
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -1090,29 +1106,25 @@ app.post('/api/characters/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, updateDocumentAttributeKeys, extractString } = require('./mongoDB');
+    const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, updateDocumentAttributeKeys, extractString } = require('./mongoDB');
     const existingChar = await Character.findOne({ projectId: pId, id });
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
-    let { name: charName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
-    if (!content && inputAttrs && Object.keys(inputAttrs).length > 0) {
-      delete parsedAttrs.unstructured;
-    }
-    const mergedAttrs = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
-    if (content && cleanContent && !mergedAttrs.unstructured) {
-      mergedAttrs.unstructured = cleanContent;
+    let { name: charName, attributes: parsedAttrs } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
+    const mergedRaw = { ...existingAttrs, ...parsedAttrs, ...(inputAttrs || {}) };
+    const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedRaw, 'characters');
+    normalizedAttrs.unstructured = null;
+    if (inputAttrs) {
+      for (const [k, v] of Object.entries(inputAttrs)) {
+        if (v === '' || v === null) normalizedAttrs[k] = null;
+      }
     }
 
-    console.log(`[DEBUG] Updating character ${id}`);
-    console.log(`[DEBUG] Input Attrs:`, inputAttrs);
-    console.log(`[DEBUG] Merged Attrs:`, mergedAttrs);
-
-    const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, mergedAttrs);
-    const finalCleanAttrs = sanitizeAttributesObj(mergedAttrs);
-    const extractText = (val) => (val && typeof val === 'object' && val.text !== undefined) ? val.text : val;
+    const updatedChar = await updateDocumentAttributeKeys(Character, pId, id, normalizedAttrs);
+    const finalCleanAttrs = sanitizeAttributesObj(updatedChar.attributes);
     updatedChar.name = extractString(reqName || (inputAttrs && inputAttrs.name) || (charName !== id ? charName : '') || (existingChar ? existingChar.name : id));
-    updatedChar.race = extractText(finalCleanAttrs['race']) || 'Unknown';
-    updatedChar.age = extractText(finalCleanAttrs['age']) || 'Unknown';
+    updatedChar.race = extractString(finalCleanAttrs['race']) || 'Unknown';
+    updatedChar.age = extractString(finalCleanAttrs['age']) || 'Unknown';
     updatedChar.content = "";
     await updatedChar.save();
 
@@ -1204,12 +1216,14 @@ const {
 
 app.post('/api/chapters/:id', async (req, res) => {
   const { id } = req.params;
-  const { content, projectId, clearPendingDiff, name, attributes } = req.body;
-  if (!content && clearPendingDiff !== true) return res.status(400).json({ error: 'Missing content' });
+  const { content, manuscript, scenes, projectId, clearPendingDiff, name, attributes } = req.body;
+  if (!content && !manuscript && !scenes && !attributes && clearPendingDiff !== true) {
+    return res.status(400).json({ error: 'Missing content or structured chapter data' });
+  }
   const pId = projectId || 'global';
 
   try {
-    await upsertChapterRecord(pId, id, { name, content, attributes, clearPendingDiff });
+    await upsertChapterRecord(pId, id, { name, content, manuscript, scenes, attributes, clearPendingDiff });
     res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
   } catch (err) {
     console.error('Error saving chapter:', err);
@@ -1267,18 +1281,19 @@ app.post('/api/notes/:id', async (req, res) => {
   const pId = projectId || 'global';
 
   try {
-    const { sanitizeAndStructureContent, constructMarkdownFromAttributes, sanitizeAttributesObj, extractString } = require('./mongoDB');
+    const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, extractString } = require('./mongoDB');
     const existingNote = await Note.findOne({ projectId: pId, id });
     const existingAttrsObj = existingNote ? sanitizeAttributesObj(existingNote.attributes) : {};
 
-    let { id: normId, type: normType, name: normName, attributes: parsedAttrs, cleanContent } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
-    if (!content && reqAttributes && Object.keys(reqAttributes).length > 0) {
-      delete parsedAttrs.unstructured;
-    }
+    let { id: normId, type: normType, name: normName, attributes: parsedAttrs } = sanitizeAndStructureContent(content || (existingNote ? existingNote.content : ''), 'note', id);
     const targetType = (reqAttributes && (reqAttributes.subtypeTag || reqAttributes.type)) || (existingAttrsObj && (existingAttrsObj.subtypeTag || existingAttrsObj.type)) || normType || 'note';
-    const mergedAttributes = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
-    if (content && cleanContent && !mergedAttributes.unstructured) {
-      mergedAttributes.unstructured = cleanContent;
+    const mergedRaw = { ...(existingAttrsObj || {}), ...(parsedAttrs || {}), ...(reqAttributes || {}), type: targetType, subtypeTag: targetType };
+    const mergedAttributes = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
+    mergedAttributes.unstructured = null;
+    if (reqAttributes) {
+      for (const [k, v] of Object.entries(reqAttributes)) {
+        if (v === '' || v === null) mergedAttributes[k] = null;
+      }
     }
 
     let note = existingNote || (await Note.findOne({ projectId: pId, id: normId }));

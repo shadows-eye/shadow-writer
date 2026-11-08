@@ -326,6 +326,100 @@ function extractString(val) {
   return String(val);
 }
 
+const METADATA_ATTRIBUTE_KEYS = new Set([
+  'type',
+  'subtypeTag',
+  'sourceDriveDocId',
+  'editorialPhase',
+  'chapterId',
+  'title',
+  'currentPhase',
+  'current_step',
+  'suggestions',
+  'stats',
+  'scenes',
+  'manuscript',
+  'pendingDiffRunId',
+  'pendingDiff'
+]);
+
+function toStructuredAttrObject(val) {
+  if (val === null || val === undefined) return { text: '', html: '' };
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    if (val.text !== undefined || val.html !== undefined) {
+      const t = val.text !== undefined && val.text !== null ? String(val.text) : String(val.html || '');
+      const h = val.html !== undefined && val.html !== null ? String(val.html) : t;
+      return { text: t, html: h };
+    }
+    try {
+      const s = JSON.stringify(val);
+      return { text: s, html: s };
+    } catch (e) {
+      return { text: '', html: '' };
+    }
+  }
+  const s = String(val).trim();
+  return { text: s, html: s };
+}
+
+function normalizeAttributesToStructuredObjects(rawAttrs, defaultType = null) {
+  const attrsObj = sanitizeAttributesObj(rawAttrs);
+  const normalized = {};
+
+  const unstructRaw = attrsObj.unstructured;
+  delete attrsObj.unstructured;
+  delete attrsObj.legacyRawHtml;
+  delete attrsObj.name;
+  delete attrsObj.id;
+
+  for (const [k, v] of Object.entries(attrsObj)) {
+    if (!k || k.startsWith('$') || k.startsWith('_')) continue;
+    if (METADATA_ATTRIBUTE_KEYS.has(k)) {
+      normalized[k] = v;
+    } else if (Array.isArray(v)) {
+      const joined = v.map(item => extractString(item)).filter(Boolean).join(', ');
+      if (joined) normalized[k] = toStructuredAttrObject(joined);
+    } else if (typeof v === 'object' && v !== null) {
+      if (v.text !== undefined || v.html !== undefined) {
+        const obj = toStructuredAttrObject(v);
+        if (obj.text || obj.html) normalized[k] = obj;
+      } else {
+        normalized[k] = v;
+      }
+    } else {
+      const s = String(v).trim();
+      if (s) normalized[k] = toStructuredAttrObject(s);
+    }
+  }
+
+  // If unstructured prose was present and no custom prose attributes exist yet, parse it into structured attributes
+  const customKeys = Object.keys(normalized).filter(k => !METADATA_ATTRIBUTE_KEYS.has(k));
+  const unstructText = extractString(unstructRaw).trim();
+  if (unstructText && customKeys.length === 0) {
+    const parsedFromUnstruct = parseContentToAttributes(unstructText, defaultType || normalized.type || 'notes');
+    for (const [pk, pv] of Object.entries(parsedFromUnstruct)) {
+      if (pk === 'type' || pk === 'subtypeTag') continue;
+      if (!normalized[pk]) {
+        normalized[pk] = toStructuredAttrObject(pv);
+      }
+    }
+    const afterKeys = Object.keys(normalized).filter(k => !METADATA_ATTRIBUTE_KEYS.has(k));
+    if (afterKeys.length === 0) {
+      const cleanProse = unstructText.replace(/^#+\s+.*$/m, '').trim() || unstructText;
+      normalized.description = toStructuredAttrObject(cleanProse);
+    }
+  }
+
+  if (defaultType && !normalized.type) {
+    normalized.type = defaultType;
+  }
+  if (defaultType && !normalized.subtypeTag) {
+    normalized.subtypeTag = defaultType;
+  }
+
+  return normalized;
+}
+
 function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   let content = rawContent || '';
   const attributes = {};
@@ -445,14 +539,25 @@ function sanitizeAndStructureContent(rawContent, type = 'note', id = '') {
   }
 
   if (content && content.trim() !== '') {
-    attributes.unstructured = content.trim();
+    const parsedFromContent = parseContentToAttributes(content.trim(), normalizedType || 'notes');
+    for (const [pk, pv] of Object.entries(parsedFromContent)) {
+      if (pk === 'type' || pk === 'subtypeTag') continue;
+      if (!attributes[pk]) {
+        attributes[pk] = toStructuredAttrObject(pv);
+      }
+    }
+    const hasCustomAttr = Object.keys(attributes).some(k => !METADATA_ATTRIBUTE_KEYS.has(k));
+    if (!hasCustomAttr) {
+      const cleanBody = content.trim().replace(/^#+\s+.*$/m, '').trim() || content.trim();
+      attributes.description = toStructuredAttrObject(cleanBody);
+    }
   }
 
   return {
     id: normalizedId,
     type: normalizedType,
     name,
-    attributes,
+    attributes: normalizeAttributesToStructuredObjects(attributes, normalizedType),
     cleanContent: content
   };
 }
@@ -775,7 +880,9 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
 
   const cleanAttr = (val) => {
     if (!val) return '';
-    let s = String(val).replace(/\r\n/g, '\n').trim();
+    const extracted = extractString(val);
+    if (!extracted) return '';
+    let s = String(extracted).replace(/\r\n/g, '\n').trim();
     s = s.replace(/\s*---\s*$/, '').trim();
     if (s.includes('-**') || s.includes('- **')) {
       s = s.replace(/([^\n])\s*[\-\*]\s*\*\*([^*]+)\*\*/g, '$1\n- **$2**').replace(/^[\-\*]\s*\*\*/gm, '- **');
@@ -853,7 +960,7 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
     const pov = cleanAttr(attrsObj.pov_character);
     const location = cleanAttr(attrsObj.location);
     const summary = cleanAttr(attrsObj.summary);
-    const body_text = cleanAttr(attrsObj.body_text);
+    const body_text = cleanAttr(attrsObj.body_text || attrsObj.description);
 
     if (pov) md += `- **POV Character**: ${pov}\n`;
     if (location) md += `- **Location**: ${location}\n`;
@@ -863,7 +970,7 @@ function constructMarkdownFromAttributes(name, type, attributes = {}) {
     if (body_text) md += `${body_text}\n\n`;
   } else {
     let generalMd = `# ${name || 'Untitled'}\n\n`;
-    let keys = Object.keys(attrsObj).filter(k => k !== 'type' && k !== 'title' && attrsObj[k]);
+    let keys = Object.keys(attrsObj).filter(k => !METADATA_ATTRIBUTE_KEYS.has(k) && attrsObj[k]);
     if (keys.length > 0) {
       keys.forEach(k => {
         const titleKey = k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -888,10 +995,12 @@ async function migrateExistingCharacters() {
         const name = nameMatch ? nameMatch[1].trim() : char.id;
 
         const attrs = await parseCharacterAttributes(char.content);
+        const normalizedAttrs = normalizeAttributesToStructuredObjects(attrs, 'characters');
         char.name = name;
-        char.race = attrs['race'] || 'Unknown';
-        char.age = attrs['age'] || 'Unknown';
-        char.attributes = attrs;
+        char.race = extractString(normalizedAttrs['race']) || 'Unknown';
+        char.age = extractString(normalizedAttrs['age']) || 'Unknown';
+        char.attributes = normalizedAttrs;
+        char.content = '';
         await char.save();
         count++;
       }
@@ -935,64 +1044,44 @@ async function migrateExistingCharacterElements() {
 
 async function ensureCleanDocumentOnRead(doc, type = 'note') {
   if (!doc) return doc;
-  
-  const unstruct = doc.attributes && typeof doc.attributes.get === 'function' ? doc.attributes.get('unstructured') : (doc.attributes || {}).unstructured;
-  if ((!doc.content || String(doc.content).trim() === '') && unstruct) {
-    doc.content = unstruct;
-  }
 
-  if (!doc.content) return doc;
+  const existingAttrsRaw = doc.attributes ? sanitizeAttributesObj(doc.attributes) : {};
+  const hasUnstructured = existingAttrsRaw.unstructured !== undefined;
+  const rawContent = typeof doc.content === 'string' ? doc.content.trim() : '';
 
-  const rawContent = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
-  
   const isOuterFenced = /^\s*```(?:markdown|md|text|txt)?\s*\n/i.test(rawContent);
   const hasFileHeader = /^\s*(?:#+\s*|File:\s*|Path:\s*|Output:\s*)?[a-zA-Z0-9_\-\/\.]+\.md\s*\n/i.test(rawContent);
   const isAliasId = (type === 'note' || type === 'dossier') && (doc.id === 'final_dossier' || doc.id === 'story_dossier' || doc.id === 'final_outline');
   const hasUnparsedJson = /```json\s*\n[\s\S]*?\n```/i.test(rawContent);
+  const hasPlainStringCustomAttr = Object.entries(existingAttrsRaw).some(
+    ([k, v]) => !METADATA_ATTRIBUTE_KEYS.has(k) && typeof v === 'string'
+  );
 
-  // Self-heal if any malformed indicator is detected
-  if (isOuterFenced || hasFileHeader || isAliasId || hasUnparsedJson) {
-    console.log(`[Self-Healing] Cleaning malformed document on read: ID="${doc.id}" (type=${type})`);
+  if (rawContent || hasUnstructured || isOuterFenced || hasFileHeader || isAliasId || hasUnparsedJson || hasPlainStringCustomAttr) {
+    const defaultType = type === 'character' ? 'characters' : (type === 'chapter' ? 'chapters' : (existingAttrsRaw.subtypeTag || existingAttrsRaw.type || type || 'notes'));
+    let mergedAttrs = { ...existingAttrsRaw };
+    let finalName = doc.name;
+    let finalId = doc.id;
 
-    // 1. Fast deterministic pass
-    const { id: normId, name: normName, attributes, cleanContent } = sanitizeAndStructureContent(rawContent, type, doc.id);
-
-    let finalContent = cleanContent;
-    let finalAttributes = { ...(doc.attributes || {}), ...attributes };
-    let finalName = doc.name || normName;
-
-    // 2. Gemini AI fallback check if content still starts with code blocks or is structurally damaged
-    if (/^\s*```/i.test(finalContent)) {
-      try {
-        const { generateContent } = require('./geminiClient');
-        const prompt = `You are a Document Restructuring Assistant. Clean and fix the following raw document content into pure, clean Markdown. 
-Do NOT enclose the entire response in markdown code blocks (\`\`\`markdown ... \`\`\`).
-Do NOT include file headers like "# dossier.md".
-Return strictly the clean formatted Markdown body.
-
-Raw Content:
-${finalContent}`;
-
-        const geminiCleaned = await generateContent({ message: prompt, isSubagent: false });
-        if (geminiCleaned && geminiCleaned.trim().length > 0) {
-          finalContent = geminiCleaned
-            .replace(/^\s*```(?:markdown|md)?\s*\n/i, '')
-            .replace(/\n```\s*$/i, '')
-            .trim();
-        }
-      } catch (e) {
-        console.warn(`[Self-Healing] Gemini AI cleanup fallback skipped for doc ${doc.id}:`, e.message);
-      }
+    if (rawContent) {
+      const { id: normId, name: normName, attributes: parsedAttrs } = sanitizeAndStructureContent(rawContent, defaultType, doc.id);
+      mergedAttrs = { ...parsedAttrs, ...mergedAttrs };
+      if (!finalName && normName) finalName = normName;
+      if (isAliasId && normId && normId !== doc.id) finalId = normId;
     }
 
-    // 3. Update the document and persist back to MongoDB
-    doc.content = finalContent;
-    doc.attributes = finalAttributes;
-    if (finalName) doc.name = finalName;
-    if (normId && normId !== doc.id) doc.id = normId;
+    const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedAttrs, defaultType);
 
+    doc.content = '';
+    doc.attributes = normalizedAttrs;
+    if (finalName) doc.name = finalName;
+    if (finalId && finalId !== doc.id) doc.id = finalId;
+
+    if (doc.markModified && typeof doc.markModified === 'function') {
+      doc.markModified('attributes');
+    }
     if (doc.save && typeof doc.save === 'function') {
-      await doc.save().catch(err => console.error(`[Self-Healing] Failed to persist cleaned doc ${doc.id}:`, err));
+      await doc.save().catch(err => console.error(`[Self-Healing] Failed to persist structured doc ${doc.id}:`, err));
     }
   }
 
@@ -1005,71 +1094,23 @@ async function cleanDatabaseOnStartup() {
   try {
     const chapters = await Chapter.find({});
     for (const doc of chapters) {
-      let existingAttrs = {};
-      if (doc.attributes) {
-        if (doc.attributes instanceof Map) {
-          existingAttrs = Object.fromEntries(doc.attributes);
-        } else if (typeof doc.attributes === 'object') {
-          existingAttrs = { ...doc.attributes };
-        }
-      }
-      
-      const raw = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
-      const { attributes, cleanContent } = sanitizeAndStructureContent(raw, 'chapter', doc.id);
-      
-      let needsSave = false;
-      if (existingAttrs.subtypeTag !== 'chapters' && existingAttrs.subtypeTag !== 'chapter') {
-        existingAttrs.subtypeTag = 'chapters';
-        existingAttrs.type = 'chapters';
-        needsSave = true;
-      }
-      if (cleanContent !== raw) {
-        doc.content = cleanContent;
-        needsSave = true;
-      }
-      if (needsSave) {
-        doc.attributes = { ...existingAttrs, ...attributes };
-        await doc.save();
-        cleanedCount++;
-      }
+      await ensureCleanDocumentOnRead(doc, 'chapter');
+      cleanedCount++;
     }
 
-    // Also check Note collection for any notes that represent chapters
     const notes = await Note.find({});
     for (const doc of notes) {
-      let existingAttrs = {};
-      if (doc.attributes) {
-        if (doc.attributes instanceof Map) {
-          existingAttrs = Object.fromEntries(doc.attributes);
-        } else if (typeof doc.attributes === 'object') {
-          existingAttrs = { ...doc.attributes };
-        }
-      }
-      const isChap = doc.type === 'chapter' || doc.id.startsWith('chapter') || (doc.name && doc.name.toLowerCase().startsWith('chapter'));
-      if (isChap && existingAttrs.subtypeTag !== 'chapters' && existingAttrs.subtypeTag !== 'chapter') {
-        doc.attributes = { ...existingAttrs, subtypeTag: 'chapters', type: 'chapters' };
-        await doc.save();
-        cleanedCount++;
-      }
+      await ensureCleanDocumentOnRead(doc, 'note');
+      cleanedCount++;
     }
 
-    // Clean Character collection for redundant name/id attribute keys
     const characters = await Character.find({});
     for (const doc of characters) {
-      if (doc.attributes) {
-        let existingAttrs = doc.attributes instanceof Map ? Object.fromEntries(doc.attributes) : { ...doc.attributes };
-        let modified = false;
-        if (existingAttrs.name) { delete existingAttrs.name; modified = true; }
-        if (existingAttrs.id) { delete existingAttrs.id; modified = true; }
-        if (modified) {
-          doc.attributes = existingAttrs;
-          await doc.save();
-          cleanedCount++;
-        }
-      }
+      await ensureCleanDocumentOnRead(doc, 'character');
+      cleanedCount++;
     }
 
-    console.log(`✓ Startup database cleanup completed. Sanitized ${cleanedCount} malformed documents.`);
+    console.log(`✓ Startup database cleanup completed. Verified ${cleanedCount} structured documents.`);
   } catch (err) {
     console.error('Error during startup database cleanup:', err);
   }
@@ -1099,7 +1140,7 @@ async function getDynamicAttributeKeys() {
         }
         
         for (const key of Object.keys(attrs)) {
-          if (key !== 'type' && key !== 'subtypeTag' && key !== 'unstructured') {
+          if (!METADATA_ATTRIBUTE_KEYS.has(key)) {
             schemaTarget[subtype].add(key);
           }
         }
@@ -1135,6 +1176,9 @@ module.exports = {
   sanitizeAndStructureContent,
   sanitizeAttributesObj,
   extractString,
+  toStructuredAttrObject,
+  normalizeAttributesToStructuredObjects,
+  METADATA_ATTRIBUTE_KEYS,
   updateDocumentAttributeKeys,
   ensureCleanDocumentOnRead,
   cleanDatabaseOnStartup,
