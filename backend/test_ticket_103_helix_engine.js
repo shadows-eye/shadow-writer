@@ -430,6 +430,76 @@ async function runTests() {
     assert.strictEqual(statusRes.data.config.language, 'de-DE');
     assert.strictEqual(statusRes.data.activeSession, null);
 
+    // 3e. Verify POST /api/helix/session/start, POST /api/helix/session/end, and GET /api/helix/summary/:jobId
+    const unauthStart = await apiReq('POST', '/api/helix/session/start', { sessionId: 's-unauth' }, { 'x-api-key': 'bad-key' });
+    assert.strictEqual(unauthStart.status, 401, 'POST /api/helix/session/start must reject invalid x-api-key');
+
+    const unauthEnd = await apiReq('POST', '/api/helix/session/end', { sessionId: 's-unauth' }, { 'x-api-key': 'bad-key' });
+    assert.strictEqual(unauthEnd.status, 401, 'POST /api/helix/session/end must reject invalid x-api-key');
+
+    const unauthSummary = await apiReq('GET', '/api/helix/summary/job-test', null, { 'x-api-key': 'bad-key' });
+    assert.strictEqual(unauthSummary.status, 401, 'GET /api/helix/summary/:jobId must reject invalid x-api-key');
+
+    const missingIdStart = await apiReq('POST', '/api/helix/session/start', {});
+    assert.strictEqual(missingIdStart.status, 400, 'POST /api/helix/session/start must reject missing sessionId');
+
+    const missingIdEnd = await apiReq('POST', '/api/helix/session/end', {});
+    assert.strictEqual(missingIdEnd.status, 400, 'POST /api/helix/session/end must reject missing sessionId when no active session');
+
+    // Start session via REST
+    const restSessionId = 'rest-sess-118';
+    const restProjectId = 'sr-project-118';
+    const startRes = await apiReq('POST', '/api/helix/session/start', {
+      sessionId: restSessionId,
+      projectId: restProjectId,
+      activePlayers: [
+        { foundryId: 'f-118', name: 'Ghost', discordId: 'd-118' }
+      ]
+    });
+    assert.strictEqual(startRes.status, 200);
+    assert.strictEqual(startRes.data.success, true);
+    assert.strictEqual(startRes.data.sessionId, restSessionId);
+    assert.strictEqual(startRes.data.status, 'active');
+    assert.ok(startRes.data.startedAt, 'startedAt timestamp must be returned');
+
+    // Status check reflects active session
+    const statusWithActive = await apiReq('GET', '/api/helix/status');
+    assert.strictEqual(statusWithActive.status, 200);
+    assert.ok(statusWithActive.data.activeSession, 'activeSession must be set in status');
+    assert.strictEqual(statusWithActive.data.activeSession.sessionId, restSessionId);
+
+    // Summary endpoint returns 'processing' for pending session
+    const summaryPending = await apiReq('GET', `/api/helix/summary/${restSessionId}`);
+    assert.strictEqual(summaryPending.status, 200);
+    assert.strictEqual(summaryPending.data.status, 'processing');
+    assert.strictEqual(summaryPending.data.jobId, restSessionId);
+
+    // End session via REST
+    const endRes = await apiReq('POST', '/api/helix/session/end', {
+      sessionId: restSessionId,
+      projectId: restProjectId
+    });
+    assert.strictEqual(endRes.status, 200);
+    assert.strictEqual(endRes.data.success, true);
+    assert.strictEqual(endRes.data.sessionId, restSessionId);
+    assert.strictEqual(endRes.data.status, 'ended');
+    assert.ok(endRes.data.endedAt, 'endedAt timestamp must be returned');
+
+    // Status check confirms activeSession is cleared
+    const statusAfterEnd = await apiReq('GET', '/api/helix/status');
+    assert.strictEqual(statusAfterEnd.data.activeSession, null);
+
+    // Summary endpoint returns 'completed' once summary Note exists
+    const summaryCompleted = await apiReq('GET', `/api/helix/summary/${restSessionId}`);
+    assert.strictEqual(summaryCompleted.status, 200);
+    assert.strictEqual(summaryCompleted.data.status, 'completed');
+    assert.strictEqual(summaryCompleted.data.sessionId, restSessionId);
+
+    // Summary endpoint with 'summary-' prefix works identically
+    const summaryWithPrefix = await apiReq('GET', `/api/helix/summary/summary-${restSessionId}`);
+    assert.strictEqual(summaryWithPrefix.status, 200);
+    assert.strictEqual(summaryWithPrefix.data.status, 'completed');
+
     console.log('✓ Slice 3 passed!');
 
     // --- SLICE 4: WebSocket (/helix/ws) Authentication & Full Session Lifecycle ---
@@ -745,9 +815,11 @@ async function runTests() {
     }
   } finally {
     // Clean up test records
-    await mongoDB.Artifact.deleteMany({ projectId: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080'] } });
-    await mongoDB.Note.deleteMany({ projectId: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080'] } });
-    await mongoDB.Project.deleteMany({ id: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080'] } });
+    await mongoDB.Artifact.deleteMany({ projectId: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080', 'sr-project-118'] } });
+    await mongoDB.Note.deleteMany({ projectId: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080', 'sr-project-118'] } });
+    await mongoDB.Project.deleteMany({ id: { $in: ['test-proj-103', 'sr-campaign-103', 'sr-project-2080', 'sr-project-118'] } });
+    await mongoDB.Artifact.deleteMany({ id: { $in: ['transcript-rest-sess-118'] } });
+    await mongoDB.Note.deleteMany({ id: { $in: ['summary-rest-sess-118'] } });
     await new Promise((resolve) => server.close(resolve));
   }
 

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.5] - 2026-11-11
+
+### Added
+- **Helix Session Lifecycle REST Endpoints & Summary Polling (`backend/helixEngine.js`, `backend/test_ticket_103_helix_engine.js`)**:
+  - Added `POST /api/helix/session/start` to trigger `handleSessionStart`, persisting session state, updating bot rich presence to recording, and returning `{ success: true, sessionId, status: 'active', startedAt }`.
+  - Added `POST /api/helix/session/end` to trigger `handleSessionEnd`, finalizing transcript artifacts, generating/storing summary notes, returning bot rich presence to idle, and returning `{ success: true, sessionId, status: 'ended', endedAt }`.
+  - Added `GET /api/helix/summary/:jobId` returning `{ status: 'completed', jobId, sessionId, summary, nextSteps }` when summary note is available, or `{ status: 'processing', jobId }` while in progress.
+
 ## [1.9.4] - 2026-11-11
 
 ### Added

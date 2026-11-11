@@ -448,6 +448,82 @@ function setupHelixEngine(app, server) {
     }
   });
 
+  router.post('/api/helix/session/start', async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const sessionId = String(payload.sessionId || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      const result = await handleSessionStart(payload);
+      const startedAt = (result && result.startedAt)
+        || (activeSession && activeSession.sessionId === sessionId && activeSession.startedAt)
+        || new Date().toISOString();
+      res.json({
+        success: true,
+        sessionId,
+        status: 'active',
+        startedAt
+      });
+    } catch (err) {
+      console.error('[Helix] Error in POST /api/helix/session/start:', err);
+      res.status(500).json({ error: 'Failed to start Helix session' });
+    }
+  });
+
+  router.post('/api/helix/session/end', async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const sessionId = String(payload.sessionId || (activeSession && activeSession.sessionId) || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      const result = await handleSessionEnd(payload);
+      const endedAt = (result && result.endedAt) || new Date().toISOString();
+      res.json({
+        success: true,
+        sessionId,
+        status: 'ended',
+        endedAt
+      });
+    } catch (err) {
+      console.error('[Helix] Error in POST /api/helix/session/end:', err);
+      res.status(500).json({ error: 'Failed to end Helix session' });
+    }
+  });
+
+  router.get('/api/helix/summary/:jobId', async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const cleanId = String(jobId || '').trim();
+      if (!cleanId) {
+        return res.json({ status: 'processing', jobId: '' });
+      }
+      const targetId = cleanId.startsWith('summary-') ? cleanId : `summary-${cleanId}`;
+      let noteDoc = await Note.findOne({ id: targetId }).lean();
+      if (!noteDoc && !cleanId.startsWith('summary-')) {
+        noteDoc = await Note.findOne({ id: cleanId }).lean();
+      }
+      if (noteDoc) {
+        const attrs = (noteDoc.attributes instanceof Map ? Object.fromEntries(noteDoc.attributes) : noteDoc.attributes) || {};
+        return res.json({
+          status: 'completed',
+          jobId: cleanId,
+          sessionId: attrs.sessionId || cleanId,
+          summary: attrs.summary || null,
+          nextSteps: attrs.next_steps || attrs.nextSteps || null
+        });
+      }
+      return res.json({
+        status: 'processing',
+        jobId: cleanId
+      });
+    } catch (err) {
+      console.error('[Helix] Error in GET /api/helix/summary/:jobId:', err);
+      res.status(500).json({ error: 'Failed to retrieve summary' });
+    }
+  });
+
   app.use(router);
 
   // --- WEBSOCKET SERVER (/helix/ws) & AUDIO/STT PIPELINE ---
@@ -791,6 +867,11 @@ function setupHelixEngine(app, server) {
         console.warn('[Helix] Discord joinVoiceChannel error:', err.message);
       }
     }
+
+    return {
+      sessionId,
+      startedAt
+    };
   }
 
   async function handleSessionMarker(payload) {
@@ -966,6 +1047,11 @@ function setupHelixEngine(app, server) {
       summary: summaryList,
       next_steps: nextStepsList
     });
+
+    return {
+      sessionId,
+      endedAt
+    };
   }
 
   async function dispatchWsAction(ws, rawMessage) {
