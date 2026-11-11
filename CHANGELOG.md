@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.4] - 2026-11-11
+
+### Added
+- **Helix Status Guild Member Resolution (`backend/helixEngine.js`, `backend/test_ticket_103_helix_engine.js`)**:
+  - Added guild/voice channel member resolution to `GET /api/helix/status` returning `members: [{ id, name, tag }]`.
+  - Added support for mock state member resolution in tests and live Discord guild/voice channel cache resolution in production.
+
 ## [1.9.3] - 2026-11-08
 
 ### Added

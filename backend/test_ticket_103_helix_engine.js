@@ -333,6 +333,9 @@ async function runTests() {
     helixEngine.setMockDiscordState({
       online: true,
       botTag: 'Helix#2080',
+      members: [
+        { id: 'user-sr-01', name: 'Razor', tag: 'Razor#0001' }
+      ],
       guilds: [
         {
           id: 'guild-sr-seattle',
@@ -415,6 +418,10 @@ async function runTests() {
     assert.ok(Array.isArray(statusRes.data.guilds));
     assert.strictEqual(statusRes.data.guilds[0].id, 'guild-sr-seattle');
     assert.strictEqual(statusRes.data.guilds[0].name, 'Seattle Sprawl 2080');
+    assert.ok(Array.isArray(statusRes.data.members), 'GET /api/helix/status must return members array');
+    assert.strictEqual(statusRes.data.members[0].id, 'user-sr-01');
+    assert.strictEqual(statusRes.data.members[0].name, 'Razor');
+    assert.strictEqual(statusRes.data.members[0].tag, 'Razor#0001');
     assert.strictEqual(statusRes.data.config.id, 'default');
     assert.strictEqual(statusRes.data.config.guildId, 'guild-sr-seattle');
     assert.strictEqual(statusRes.data.config.guildName, 'Seattle Sprawl 2080');
