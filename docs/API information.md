@@ -165,15 +165,30 @@ Checks the operational health of the downstream `shadow-writer` service and Heli
 * **Success Response (`200 OK`)**:
   ```json
   {
-    "status": "online",
-    "service": "shadow-writer",
-    "version": "1.9.9",
-    "helix": {
-      "connected": true,
-      "activeSessions": 1
-    }
+    "online": true,
+    "botTag": "Helix#2080",
+    "connectedGuildId": "guild-sr-seattle",
+    "connectedChannelId": "ch-voice-1",
+    "installedGuildIds": ["guild-sr-seattle"],
+    "guilds": [
+      { "id": "guild-sr-seattle", "name": "Seattle Sprawl 2080" }
+    ],
+    "members": [
+      { "id": "123456789", "name": "Razor", "tag": "Razor#0001", "isBot": false },
+      { "id": "987654321", "name": "Decker", "tag": "Decker#0002", "isBot": false }
+    ],
+    "config": {
+      "id": "default",
+      "guildId": "guild-sr-seattle",
+      "channelId": "ch-voice-1",
+      "language": "de-DE"
+    },
+    "activeSession": null
   }
   ```
+
+> [!IMPORTANT]
+> **Discord Privileged Intent Requirement**: The bot application requires the **Server Members Intent** (`GatewayIntentBits.GuildMembers`) enabled in the Discord Developer Portal (under *Bot -> Privileged Gateway Intents -> Server Members Intent*) so that Helix can fetch and map non-bot Discord members for Foundry VTT player account linking.
 
 ---
 

@@ -334,12 +334,17 @@ async function runTests() {
       online: true,
       botTag: 'Helix#2080',
       members: [
-        { id: 'user-sr-01', name: 'Razor', tag: 'Razor#0001' }
+        { id: 'user-sr-01', name: 'Razor', tag: 'Razor#0001', isBot: false }
       ],
       guilds: [
         {
           id: 'guild-sr-seattle',
           name: 'Seattle Sprawl 2080',
+          members: [
+            { id: 'user-sr-01', name: 'Razor', tag: 'Razor#0001', isBot: false },
+            { id: 'user-sr-02', name: 'Decker', tag: 'Decker#0002', isBot: false },
+            { id: 'bot-sr-03', name: 'Helix', tag: 'Helix#5072', isBot: true, bot: true }
+          ],
           channels: [
             { id: 'ch-text-1', name: 'general-chat', type: 0 }, // GuildText (0) - should be filtered out
             { id: 'ch-voice-1', name: 'Matrix Comms', type: 2 }, // GuildVoice (2) - should be included
@@ -419,9 +424,15 @@ async function runTests() {
     assert.strictEqual(statusRes.data.guilds[0].id, 'guild-sr-seattle');
     assert.strictEqual(statusRes.data.guilds[0].name, 'Seattle Sprawl 2080');
     assert.ok(Array.isArray(statusRes.data.members), 'GET /api/helix/status must return members array');
+    assert.strictEqual(statusRes.data.members.length, 2, 'GET /api/helix/status must filter out bot members and return guild members');
     assert.strictEqual(statusRes.data.members[0].id, 'user-sr-01');
     assert.strictEqual(statusRes.data.members[0].name, 'Razor');
     assert.strictEqual(statusRes.data.members[0].tag, 'Razor#0001');
+    assert.strictEqual(statusRes.data.members[0].isBot, false);
+    assert.strictEqual(statusRes.data.members[1].id, 'user-sr-02');
+    assert.strictEqual(statusRes.data.members[1].name, 'Decker');
+    assert.strictEqual(statusRes.data.members[1].tag, 'Decker#0002');
+    assert.strictEqual(statusRes.data.members[1].isBot, false);
     assert.strictEqual(statusRes.data.config.id, 'default');
     assert.strictEqual(statusRes.data.config.guildId, 'guild-sr-seattle');
     assert.strictEqual(statusRes.data.config.guildName, 'Seattle Sprawl 2080');
