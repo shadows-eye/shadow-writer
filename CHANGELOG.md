@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.6] - 2026-11-12
+
+### Fixed
+- **Character Update ProjectId Query Fallback & Response Parity (`backend/server.js`)**:
+  - Enhanced `POST /api/characters/:id` to check `req.query.projectId` as fallback when `req.body.projectId` is not specified, preventing unintended fallback to `'global'` scope.
+  - Aligned character save response shape with Note endpoints by returning the full formatted character document alongside `{ success: true, commit, character }`.
+  - Added existing character lookup fallback to `'global'` and ID-only search when project-specific document is not yet found.
+
 ## [1.9.5] - 2026-11-12
 
 ### Added

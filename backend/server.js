@@ -1195,13 +1195,19 @@ app.get('/api/characters/:id', async (req, res) => {
 
 app.post('/api/characters/:id', async (req, res) => {
   const { id } = req.params;
-  const { name: reqName, content, attributes: inputAttrs, projectId } = req.body;
+  const { name: reqName, content, attributes: inputAttrs, projectId } = req.body || {};
   if (!content && !inputAttrs && !reqName) return res.status(400).json({ error: 'Missing content or attributes' });
-  const pId = projectId || 'global';
+  const pId = projectId || req.query.projectId || 'global';
 
   try {
     const { sanitizeAndStructureContent, sanitizeAttributesObj, normalizeAttributesToStructuredObjects, updateDocumentAttributeKeys, extractString } = require('./mongoDB');
-    const existingChar = await Character.findOne({ projectId: pId, id });
+    let existingChar = await Character.findOne({ projectId: pId, id });
+    if (!existingChar && pId !== 'global') {
+      existingChar = await Character.findOne({ projectId: 'global', id });
+    }
+    if (!existingChar) {
+      existingChar = await Character.findOne({ id });
+    }
     const existingAttrs = existingChar ? sanitizeAttributesObj(existingChar.attributes) : {};
 
     let { name: charName, attributes: parsedAttrs } = sanitizeAndStructureContent(content || (existingChar ? existingChar.content : ''), 'character', id);
@@ -1232,7 +1238,23 @@ app.post('/api/characters/:id', async (req, res) => {
       logs: [`Update character: ${id}`]
     });
 
-    res.json({ success: true, commit: 'db_' + Math.random().toString(36).substring(2, 10) });
+    const formattedChar = {
+      id: updatedChar.id,
+      projectId: updatedChar.projectId,
+      name: updatedChar.name,
+      race: updatedChar.race,
+      age: updatedChar.age,
+      content: '',
+      attributes: finalCleanAttrs,
+      lastEdited: updatedChar.lastEdited
+    };
+
+    res.json({
+      success: true,
+      commit: 'db_' + Math.random().toString(36).substring(2, 10),
+      ...formattedChar,
+      character: formattedChar
+    });
   } catch (err) {
     console.error('Error saving character:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message, stack: err.stack });
