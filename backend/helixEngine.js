@@ -271,7 +271,7 @@ function setupHelixEngine(app, server) {
             const name = m.displayName || user.username || m.name || String(m.id);
             const tag = user.tag || user.username || m.displayName || m.name || String(m.id);
             return {
-              id: String(m.id),
+              id: String(m.id || ''),
               name: String(name),
               tag: String(tag),
               isBot: false
