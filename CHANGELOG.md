@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.7] - 2026-11-12
+
+### Fixed
+- **Helix Status Guild Members Resolution & Privileged Gateway Intent (#21)**:
+  - Added `GatewayIntentBits.GuildMembers` privileged intent to discord.js `Client` initialization in `backend/helixEngine.js`.
+  - Updated `getGuildMembers` to asynchronously fetch all server members via `await guild.members.fetch()` for the configured guild rather than restricting strictly to active voice channel participants.
+  - Added filtering for bot accounts and explicit `isBot: false` flag to ensure human members are cleanly mapped to Foundry VTT player accounts.
+  - Updated automated unit tests in `backend/test_ticket_103_helix_engine.js` asserting `GET /api/helix/status` returns multiple guild members and filters out bot accounts.
+  - Documented Discord Developer Portal **Server Members Intent** configuration requirement in `docs/API information.md`.
+
 ## [1.9.6] - 2026-11-12
 
 ### Fixed
