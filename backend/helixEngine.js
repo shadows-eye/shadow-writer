@@ -216,6 +216,71 @@ function setupHelixEngine(app, server) {
     return [];
   }
 
+  function getGuildMembers(guildId, channelId) {
+    if (mockDiscordState !== null) {
+      if (Array.isArray(mockDiscordState.members)) {
+        return mockDiscordState.members.map(m => ({
+          id: String(m.id || ''),
+          name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
+          tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
+        }));
+      }
+      if (Array.isArray(mockDiscordState.guilds) && guildId) {
+        const guild = mockDiscordState.guilds.find(g => String(g.id) === String(guildId));
+        if (guild) {
+          if (channelId && Array.isArray(guild.channels)) {
+            const channel = guild.channels.find(c => String(c.id) === String(channelId));
+            if (channel && Array.isArray(channel.members) && channel.members.length > 0) {
+              return channel.members.map(m => ({
+                id: String(m.id || ''),
+                name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
+                tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
+              }));
+            }
+          }
+          if (Array.isArray(guild.members)) {
+            return guild.members.map(m => ({
+              id: String(m.id || ''),
+              name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
+              tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
+            }));
+          }
+        }
+      }
+      return [];
+    }
+
+    if (discordClient && discordReady && discordClient.guilds && discordClient.guilds.cache) {
+      if (!guildId) return [];
+      const guild = discordClient.guilds.cache.get(String(guildId));
+      if (!guild) return [];
+
+      let memberCollection = null;
+      if (channelId && guild.channels && guild.channels.cache) {
+        const channel = guild.channels.cache.get(String(channelId));
+        if (channel && channel.members && channel.members.size > 0) {
+          memberCollection = channel.members;
+        }
+      }
+      if (!memberCollection && guild.members && guild.members.cache) {
+        memberCollection = guild.members.cache;
+      }
+      if (memberCollection) {
+        return Array.from(memberCollection.values()).map(m => {
+          const user = m.user || {};
+          const name = m.displayName || user.username || m.name || String(m.id);
+          const tag = user.tag || user.username || m.displayName || m.name || String(m.id);
+          return {
+            id: String(m.id),
+            name: String(name),
+            tag: String(tag)
+          };
+        });
+      }
+    }
+    return [];
+  }
+
   async function getOrCreateHelixConfig() {
     let cfg = await HelixConfig.findOne({ id: 'default' }).lean();
     if (!cfg) {
@@ -257,6 +322,7 @@ function setupHelixEngine(app, server) {
       const installedGuildIds = guilds.map(g => String(g.id));
       const connectedGuildId = (activeSession && activeSession.guildId) || config.guildId || null;
       const connectedChannelId = (activeSession && activeSession.channelId) || config.channelId || null;
+      const members = getGuildMembers(connectedGuildId, connectedChannelId);
       const botStatus = {
         online,
         connectedGuildId,
@@ -280,6 +346,7 @@ function setupHelixEngine(app, server) {
         installedGuildIds,
         botStatus,
         guilds,
+        members,
         config: {
           id: 'default',
           guildId: config.guildId,
@@ -378,6 +445,82 @@ function setupHelixEngine(app, server) {
     } catch (err) {
       console.error('[Helix] Error in POST /api/helix/config:', err);
       res.status(500).json({ error: 'Failed to save Helix configuration' });
+    }
+  });
+
+  router.post('/api/helix/session/start', async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const sessionId = String(payload.sessionId || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      const result = await handleSessionStart(payload);
+      const startedAt = (result && result.startedAt)
+        || (activeSession && activeSession.sessionId === sessionId && activeSession.startedAt)
+        || new Date().toISOString();
+      res.json({
+        success: true,
+        sessionId,
+        status: 'active',
+        startedAt
+      });
+    } catch (err) {
+      console.error('[Helix] Error in POST /api/helix/session/start:', err);
+      res.status(500).json({ error: 'Failed to start Helix session' });
+    }
+  });
+
+  router.post('/api/helix/session/end', async (req, res) => {
+    try {
+      const payload = req.body || {};
+      const sessionId = String(payload.sessionId || (activeSession && activeSession.sessionId) || '').trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      const result = await handleSessionEnd(payload);
+      const endedAt = (result && result.endedAt) || new Date().toISOString();
+      res.json({
+        success: true,
+        sessionId,
+        status: 'ended',
+        endedAt
+      });
+    } catch (err) {
+      console.error('[Helix] Error in POST /api/helix/session/end:', err);
+      res.status(500).json({ error: 'Failed to end Helix session' });
+    }
+  });
+
+  router.get('/api/helix/summary/:jobId', async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const cleanId = String(jobId || '').trim();
+      if (!cleanId) {
+        return res.json({ status: 'processing', jobId: '' });
+      }
+      const targetId = cleanId.startsWith('summary-') ? cleanId : `summary-${cleanId}`;
+      let noteDoc = await Note.findOne({ id: targetId }).lean();
+      if (!noteDoc && !cleanId.startsWith('summary-')) {
+        noteDoc = await Note.findOne({ id: cleanId }).lean();
+      }
+      if (noteDoc) {
+        const attrs = (noteDoc.attributes instanceof Map ? Object.fromEntries(noteDoc.attributes) : noteDoc.attributes) || {};
+        return res.json({
+          status: 'completed',
+          jobId: cleanId,
+          sessionId: attrs.sessionId || cleanId,
+          summary: attrs.summary || null,
+          nextSteps: attrs.next_steps || attrs.nextSteps || null
+        });
+      }
+      return res.json({
+        status: 'processing',
+        jobId: cleanId
+      });
+    } catch (err) {
+      console.error('[Helix] Error in GET /api/helix/summary/:jobId:', err);
+      res.status(500).json({ error: 'Failed to retrieve summary' });
     }
   });
 
@@ -724,6 +867,11 @@ function setupHelixEngine(app, server) {
         console.warn('[Helix] Discord joinVoiceChannel error:', err.message);
       }
     }
+
+    return {
+      sessionId,
+      startedAt
+    };
   }
 
   async function handleSessionMarker(payload) {
@@ -899,6 +1047,11 @@ function setupHelixEngine(app, server) {
       summary: summaryList,
       next_steps: nextStepsList
     });
+
+    return {
+      sessionId,
+      endedAt
+    };
   }
 
   async function dispatchWsAction(ws, rawMessage) {
