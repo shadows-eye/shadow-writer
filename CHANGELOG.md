@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.9.4] - 2026-11-12
+## [1.9.5] - 2026-11-12
 
 ### Added
 - **Helix Status Guild Member Resolution (`backend/helixEngine.js`, `backend/test_ticket_103_helix_engine.js`)**:
