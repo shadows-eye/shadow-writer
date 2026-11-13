@@ -137,7 +137,8 @@ function setupHelixEngine(app, server) {
       discordClient = new Client({
         intents: [
           GatewayIntentBits.Guilds,
-          GatewayIntentBits.GuildVoiceStates
+          GatewayIntentBits.GuildVoiceStates,
+          GatewayIntentBits.GuildMembers
         ]
       });
       discordClient.once('ready', () => {
@@ -216,38 +217,31 @@ function setupHelixEngine(app, server) {
     return [];
   }
 
-  function getGuildMembers(guildId, channelId) {
+  async function getGuildMembers(guildId, channelId) {
     if (mockDiscordState !== null) {
-      if (Array.isArray(mockDiscordState.members)) {
-        return mockDiscordState.members.map(m => ({
-          id: String(m.id || ''),
-          name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
-          tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
-        }));
-      }
+      let rawMembers = [];
       if (Array.isArray(mockDiscordState.guilds) && guildId) {
         const guild = mockDiscordState.guilds.find(g => String(g.id) === String(guildId));
-        if (guild) {
-          if (channelId && Array.isArray(guild.channels)) {
-            const channel = guild.channels.find(c => String(c.id) === String(channelId));
-            if (channel && Array.isArray(channel.members) && channel.members.length > 0) {
-              return channel.members.map(m => ({
-                id: String(m.id || ''),
-                name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
-                tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
-              }));
-            }
-          }
-          if (Array.isArray(guild.members)) {
-            return guild.members.map(m => ({
-              id: String(m.id || ''),
-              name: String(m.name || m.displayName || (m.user && m.user.username) || m.id || ''),
-              tag: String(m.tag || (m.user && m.user.tag) || m.name || m.displayName || m.id || '')
-            }));
-          }
+        if (guild && Array.isArray(guild.members) && guild.members.length > 0) {
+          rawMembers = guild.members;
         }
       }
-      return [];
+      if (rawMembers.length === 0 && Array.isArray(mockDiscordState.members)) {
+        rawMembers = mockDiscordState.members;
+      }
+      return rawMembers
+        .filter(m => !m.bot && !(m.user && m.user.bot) && !m.isBot)
+        .map(m => {
+          const user = m.user || {};
+          const name = m.displayName || user.username || m.name || String(m.id || '');
+          const tag = user.tag || user.username || m.tag || m.displayName || m.name || String(m.id || '');
+          return {
+            id: String(m.id || ''),
+            name: String(name),
+            tag: String(tag),
+            isBot: false
+          };
+        });
     }
 
     if (discordClient && discordReady && discordClient.guilds && discordClient.guilds.cache) {
@@ -256,26 +250,33 @@ function setupHelixEngine(app, server) {
       if (!guild) return [];
 
       let memberCollection = null;
-      if (channelId && guild.channels && guild.channels.cache) {
-        const channel = guild.channels.cache.get(String(channelId));
-        if (channel && channel.members && channel.members.size > 0) {
-          memberCollection = channel.members;
+      try {
+        if (guild.members && typeof guild.members.fetch === 'function') {
+          memberCollection = await guild.members.fetch();
         }
+      } catch (err) {
+        console.warn('[Helix] Failed to fetch guild members:', err.message);
       }
       if (!memberCollection && guild.members && guild.members.cache) {
         memberCollection = guild.members.cache;
       }
       if (memberCollection) {
-        return Array.from(memberCollection.values()).map(m => {
-          const user = m.user || {};
-          const name = m.displayName || user.username || m.name || String(m.id);
-          const tag = user.tag || user.username || m.displayName || m.name || String(m.id);
-          return {
-            id: String(m.id),
-            name: String(name),
-            tag: String(tag)
-          };
-        });
+        return Array.from(memberCollection.values())
+          .filter(m => {
+            const user = m.user || {};
+            return !user.bot && !m.bot;
+          })
+          .map(m => {
+            const user = m.user || {};
+            const name = m.displayName || user.username || m.name || String(m.id);
+            const tag = user.tag || user.username || m.displayName || m.name || String(m.id);
+            return {
+              id: String(m.id || ''),
+              name: String(name),
+              tag: String(tag),
+              isBot: false
+            };
+          });
       }
     }
     return [];
@@ -322,7 +323,7 @@ function setupHelixEngine(app, server) {
       const installedGuildIds = guilds.map(g => String(g.id));
       const connectedGuildId = (activeSession && activeSession.guildId) || config.guildId || null;
       const connectedChannelId = (activeSession && activeSession.channelId) || config.channelId || null;
-      const members = getGuildMembers(connectedGuildId, connectedChannelId);
+      const members = await getGuildMembers(connectedGuildId, connectedChannelId);
       const botStatus = {
         online,
         connectedGuildId,
