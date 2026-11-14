@@ -1,7 +1,7 @@
 const express = require('express');
 const { WebSocketServer, WebSocket } = require('ws');
 const { Client, GatewayIntentBits, ChannelType, ActivityType } = require('discord.js');
-const { joinVoiceChannel: discordJoinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
+const { joinVoiceChannel: discordJoinVoiceChannel, EndBehaviorType, VoiceConnectionStatus } = require('@discordjs/voice');
 const prism = require('prism-media');
 const speech = require('@google-cloud/speech');
 const {
@@ -141,7 +141,7 @@ function setupHelixEngine(app, server) {
           GatewayIntentBits.GuildMembers
         ]
       });
-      discordClient.once('ready', () => {
+      discordClient.once('clientReady', () => {
         discordReady = true;
         console.log(`[Helix] Discord bot logged in as ${discordClient.user ? discordClient.user.tag : 'unknown'}`);
         updateBotPresence('idle');
@@ -271,6 +271,9 @@ function setupHelixEngine(app, server) {
     return false;
   }
 
+  const guildMemberFetchTimestamps = new Map();
+  const GUILD_MEMBER_FETCH_TTL_MS = 60 * 1000;
+
   async function getGuildMembers(guildId, channelId, roleId = '') {
     const targetRoleId = String(roleId || '').trim();
     if (mockDiscordState !== null) {
@@ -306,12 +309,18 @@ function setupHelixEngine(app, server) {
       if (!guild) return [];
 
       let memberCollection = null;
-      try {
-        if (guild.members && typeof guild.members.fetch === 'function') {
-          memberCollection = await guild.members.fetch();
+      const gKey = String(guildId);
+      const lastFetch = guildMemberFetchTimestamps.get(gKey) || 0;
+      const cacheHasMembers = guild.members && guild.members.cache && guild.members.cache.size > 0;
+      if (!cacheHasMembers || (Date.now() - lastFetch > GUILD_MEMBER_FETCH_TTL_MS)) {
+        try {
+          if (guild.members && typeof guild.members.fetch === 'function') {
+            memberCollection = await guild.members.fetch();
+            guildMemberFetchTimestamps.set(gKey, Date.now());
+          }
+        } catch (err) {
+          console.warn('[Helix] Failed to fetch guild members:', err.message);
         }
-      } catch (err) {
-        console.warn('[Helix] Failed to fetch guild members:', err.message);
       }
       if (!memberCollection && guild.members && guild.members.cache) {
         memberCollection = guild.members.cache;
@@ -784,7 +793,6 @@ function setupHelixEngine(app, server) {
     try {
       if (bundle.sttStream) {
         if (typeof bundle.sttStream.end === 'function') bundle.sttStream.end();
-        if (typeof bundle.sttStream.destroy === 'function') bundle.sttStream.destroy();
       }
     } catch (e) {}
   }
@@ -801,6 +809,7 @@ function setupHelixEngine(app, server) {
       const playerInfo = session.playerMap.get(discordId) || null;
       const foundryId = playerInfo ? playerInfo.foundryId : null;
       const speakerName = (playerInfo && (playerInfo.name || playerInfo.foundryId)) || discordId;
+      console.log(`[Helix] Speaking start: ${speakerName} (${discordId})`);
 
       // Immediately emit speaking_start over WebSocket
       broadcastWs({
@@ -851,6 +860,7 @@ function setupHelixEngine(app, server) {
             const transcriptText = alt && alt.transcript ? String(alt.transcript).trim() : '';
             if (!transcriptText) continue;
 
+            console.log(`[Helix] Transcript (${speakerName}): ${transcriptText}`);
             session.entries.push({
               kind: 'utterance',
               timestamp: new Date().toISOString(),
@@ -894,15 +904,6 @@ function setupHelixEngine(app, server) {
         discordId,
         foundryId
       });
-
-      const bundle = session.userStreams.get(discordId);
-      if (bundle) {
-        try {
-          if (bundle.opusStream && typeof bundle.opusStream.end === 'function') {
-            bundle.opusStream.end();
-          }
-        } catch (e) {}
-      }
     };
 
     receiver.speaking.on('start', onSpeakingStart);
@@ -1028,6 +1029,7 @@ function setupHelixEngine(app, server) {
       try {
         const guild = discordClient.guilds.cache.get(String(guildId));
         if (guild && guild.voiceAdapterCreator) {
+          console.log(`[Helix] Joining voice channel ${channelId} in guild ${guildId} for session ${sessionId}`);
           const conn = discordJoinVoiceChannel({
             channelId: String(channelId),
             guildId: String(guildId),
@@ -1035,12 +1037,22 @@ function setupHelixEngine(app, server) {
             selfDeaf: false,
             selfMute: true
           });
+          conn.on('stateChange', (oldState, newState) => {
+            console.log(`[Helix] Voice connection state: ${oldState.status} -> ${newState.status}`);
+          });
+          conn.on('error', (err) => {
+            console.error('[Helix] Voice connection error:', err.message);
+          });
           activeSession.voiceConnection = conn;
           attachVoiceReceiver(activeSession, conn);
+        } else {
+          console.warn(`[Helix] Could not join voice: guild ${guildId} not found in cache or missing voiceAdapterCreator`);
         }
       } catch (err) {
         console.warn('[Helix] Discord joinVoiceChannel error:', err.message);
       }
+    } else {
+      console.warn(`[Helix] Voice join skipped: discordReady=${discordReady}, guildId=${guildId || 'none'}, channelId=${channelId || 'none'}`);
     }
 
     return {
