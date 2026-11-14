@@ -224,6 +224,7 @@ const Character = mongoose.model('Character', CharacterSchema);
 const NoteSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
+  userId: String,
   name: String,
   title: String,
   type: { type: String, default: 'note' },
@@ -244,6 +245,7 @@ const Note = mongoose.model('Note', NoteSchema);
 const ArtifactSchema = new mongoose.Schema({
   projectId: { type: String, required: true },
   id: { type: String, required: true },
+  userId: String,
   name: String,
   title: String,
   type: { type: String, default: 'artifact' },
@@ -263,10 +265,13 @@ const Artifact = mongoose.model('Artifact', ArtifactSchema);
 
 const HelixConfigSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true, default: 'default' },
+  userId: { type: String, default: '' },
   guildId: { type: String, default: '' },
   guildName: { type: String, default: '' },
   channelId: { type: String, default: '' },
   channelName: { type: String, default: '' },
+  roleId: { type: String, default: '' },
+  roleName: { type: String, default: '' },
   language: { type: String, default: 'de-DE' },
   updatedAt: { type: Date, default: Date.now }
 });
