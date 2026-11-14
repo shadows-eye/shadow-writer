@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.9] - 2026-11-14
+
+### Fixed
+- **Discord Voice DAVE E2EE, STT Stream Flushing & Member Fetch Rate Limiting**:
+  - Upgraded `@discordjs/voice` to `^0.19.2`, `discord.js` to `^14.28.1`, and added `@snazzah/davey` (`^0.2.0`) to support Discord's mandatory DAVE End-to-End Encryption on live voice receive.
+  - Added a 60-second per-guild TTL cache around `guild.members.fetch()` with `guild.members.cache` fallback in `backend/helixEngine.js` to prevent Discord Opcode 8 rate-limiting on `/api/helix/status` polls.
+  - Fixed `cleanupUserStream` to flush Google Cloud Speech-to-Text streams cleanly via `sttStream.end()` instead of premature `destroy()`, removed `opusStream.end()` on Readable `AudioReceiveStream`, and added `VoiceConnectionStatus` / speaking / transcript diagnostic logging.
+
 ## [1.9.8] - 2026-11-14
 
 ### Added
