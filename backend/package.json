@@ -12,10 +12,11 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@discordjs/voice": "^0.18.0",
+    "@discordjs/voice": "^0.19.2",
     "@google-cloud/speech": "^6.7.0",
+    "@snazzah/davey": "^0.2.0",
     "cors": "^2.8.6",
-    "discord.js": "^14.16.3",
+    "discord.js": "^14.28.1",
     "docx": "^8.2.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
