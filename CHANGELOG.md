@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.9] - 2026-11-14
+
+### Fixed
+- **Discord Voice DAVE E2EE, STT Stream Flushing & Member Fetch Rate Limiting**:
+  - Upgraded `@discordjs/voice` to `^0.19.2`, `discord.js` to `^14.28.1`, and added `@snazzah/davey` (`^0.2.0`) to support Discord's mandatory DAVE End-to-End Encryption on live voice receive.
+  - Added a 60-second per-guild TTL cache around `guild.members.fetch()` with `guild.members.cache` fallback in `backend/helixEngine.js` to prevent Discord Opcode 8 rate-limiting on `/api/helix/status` polls.
+  - Fixed `cleanupUserStream` to flush Google Cloud Speech-to-Text streams cleanly via `sttStream.end()` instead of premature `destroy()`, removed `opusStream.end()` on Readable `AudioReceiveStream`, and added `VoiceConnectionStatus` / speaking / transcript diagnostic logging.
+
+## [1.9.8] - 2026-11-14
+
+### Added
+- **Multi-User Helix Configuration & Discord Role Filtering (#125)**:
+  - Scoped `HelixConfig` per `userId` (`user:<userId>`) with `roleId`/`roleName` persistence (`backend/mongoDB.js`, `backend/helixEngine.js`).
+  - Added `GET /api/helix/guilds/:guildId/roles` (excluding `@everyone`, sorted by position) and filtered `getGuildMembers` by `config.roleId` when configured.
+  - Stamped `userId` onto `Project`, transcript `Artifact`, and summary `Note` records, and enforced single active voice session lock (`409` on REST, `session_conflict` over WS).
+- **Book-Scoped Session Summaries & Cross-User Isolation (#126)**:
+  - Scoped `GET /api/helix/summary/:jobId`, `GET /api/notes/:id`, and `POST /api/notes/:id` (`upsertStructuredDocument`) by `projectId` and `userId` (`X-User-Id`), rejecting cross-user overwrites (`403`) and preserving scalar `attributes.projectId`.
+  - Protected `Project` ownership on `handleSessionStart` (`403` on cross-user writes), forwarded `X-User-Id` on `POST /api/helix/session/end`, and included `projectId` + `sessionId` in REST & WebSocket summary responses.
+
 ## [1.9.7] - 2026-11-12
 
 ### Fixed
