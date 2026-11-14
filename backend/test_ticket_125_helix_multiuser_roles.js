@@ -27,9 +27,9 @@ async function runTests() {
 
   // Clean up any leftover test records
   await mongoDB.HelixConfig.deleteMany({ id: { $in: ['default', 'user:user-a', 'user:user-b', 'user:schema-check'] } });
-  await mongoDB.Artifact.deleteMany({ projectId: { $in: ['proj-125-a', 'proj-125-ws'] } });
-  await mongoDB.Note.deleteMany({ projectId: { $in: ['proj-125-a', 'proj-125-ws'] } });
-  await mongoDB.Project.deleteMany({ id: { $in: ['proj-125-a', 'proj-125-ws'] } });
+  await mongoDB.Artifact.deleteMany({ projectId: { $in: ['proj-125-a', 'proj-125-b', 'proj-125-ws'] } });
+  await mongoDB.Note.deleteMany({ projectId: { $in: ['proj-125-a', 'proj-125-b', 'proj-125-ws'] } });
+  await mongoDB.Project.deleteMany({ id: { $in: ['proj-125-a', 'proj-125-b', 'proj-125-ws'] } });
 
   // 1. Schema checks
   console.log('1. Testing MongoDB schema fields for HelixConfig, Artifact, Note...');
@@ -273,7 +273,7 @@ async function runTests() {
     // Verify user-b's session start uses user-b's scoped HelixConfig when guildId/channelId/language are omitted
     const startBRes = await apiReq('POST', '/api/helix/session/start', {
       sessionId: 'sess-125-b-scoped',
-      projectId: 'proj-125-a'
+      projectId: 'proj-125-b'
     }, { 'x-user-id': 'user-b', 'x-user-email': 'b@example.com' });
     assert.strictEqual(startBRes.status, 200);
     assert.strictEqual(engine.getActiveSession().guildId, 'guild-berlin');
