@@ -1401,6 +1401,10 @@ app.get('/api/notes/:id', async (req, res) => {
       note = await Note.findOne({ projectId: pId, id: { $in: ['final_dossier', 'story_dossier', 'dossier'] } });
     }
     if (!note) return res.status(404).json({ error: 'Note not found' });
+    const reqUserId = String(req.headers['x-user-id'] || '').trim();
+    if (reqUserId && note.userId && note.userId !== reqUserId) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     const cleaned = await ensureCleanDocumentOnRead(note, 'note');
     const cleanAttrs = sanitizeAttributesObj(cleaned.attributes);
     const docTitle = cleaned.title || cleaned.name || cleaned.id;
@@ -1425,6 +1429,7 @@ app.get('/api/notes/:id', async (req, res) => {
 async function upsertStructuredDocument(Model, docType, req, res) {
   const id = req.params.id || (req.body && req.body.id);
   const { name, title, type: reqType, subtypeTag: reqSubtypeTag, content, projectId, attributes: reqAttributes } = req.body || {};
+  const reqUserId = String(req.headers['x-user-id'] || (req.body && req.body.userId) || '').trim();
   if (!id) return res.status(400).json({ error: `Missing ${docType} id` });
   if (docType === 'note' && !content && !reqAttributes && !name && !title) {
     return res.status(400).json({ error: 'Missing content or attributes' });
@@ -1440,6 +1445,9 @@ async function upsertStructuredDocument(Model, docType, req, res) {
       existingDoc = await Model.findOne({ id });
     } else if (!existingDoc) {
       existingDoc = await Model.findOne({ projectId: 'global', id });
+    }
+    if (existingDoc && reqUserId && existingDoc.userId && existingDoc.userId !== reqUserId) {
+      return res.status(403).json({ error: 'Forbidden: document belongs to another user' });
     }
     const pId = requestedPid || (existingDoc && existingDoc.projectId) || 'global';
     const existingAttrsObj = existingDoc ? sanitizeAttributesObj(existingDoc.attributes) : {};
@@ -1474,7 +1482,7 @@ async function upsertStructuredDocument(Model, docType, req, res) {
     const normalizedAttrs = normalizeAttributesToStructuredObjects(mergedRaw, targetType);
     delete normalizedAttrs.unstructured;
 
-    for (const metaKey of ['sessionId', 'entries', 'markers', 'activePlayers', 'startedAt', 'endedAt']) {
+    for (const metaKey of ['sessionId', 'projectId', 'entries', 'markers', 'activePlayers', 'startedAt', 'endedAt']) {
       if (Object.prototype.hasOwnProperty.call(mergedRaw, metaKey)) {
         normalizedAttrs[metaKey] = mergedRaw[metaKey];
       }
@@ -1489,10 +1497,16 @@ async function upsertStructuredDocument(Model, docType, req, res) {
     }
 
     let doc = existingDoc || (await Model.findOne({ projectId: pId, id: normId }));
+    if (doc && reqUserId && doc.userId && doc.userId !== reqUserId) {
+      return res.status(403).json({ error: 'Forbidden: document belongs to another user' });
+    }
     if (!doc) {
       doc = new Model({ projectId: pId, id: normId });
     }
     doc.projectId = pId;
+    if (!doc.userId && reqUserId) {
+      doc.userId = reqUserId;
+    }
 
     if (!doc.attributes) doc.attributes = {};
     if (doc.attributes && typeof doc.attributes.delete === 'function') {

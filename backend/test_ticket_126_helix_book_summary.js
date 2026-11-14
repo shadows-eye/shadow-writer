@@ -1,5 +1,4 @@
 const assert = require('assert');
-const http = require('http');
 const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
@@ -8,7 +7,7 @@ process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/
 process.env.MCP_API_KEY = process.env.MCP_API_KEY || 'test-helix-mcp-key-126';
 
 const mongoDB = require('./mongoDB');
-const { setupHelixEngine } = require('./helixEngine');
+const { server } = require('./server');
 
 async function waitForConnection() {
   if (mongoDB.dbReadyPromise) {
@@ -30,11 +29,6 @@ async function runTests() {
   await mongoDB.Artifact.deleteMany({ projectId: { $in: testProjectIds } });
   await mongoDB.Note.deleteMany({ projectId: { $in: testProjectIds } });
   await mongoDB.Project.deleteMany({ id: { $in: testProjectIds } });
-
-  const app = express();
-  app.use(express.json());
-  const server = http.createServer(app);
-  setupHelixEngine(app, server);
 
   // Mock Flask summarizer server
   const mockFlaskApp = express();
@@ -58,7 +52,11 @@ async function runTests() {
   async function apiReq(method, path, body = null, headers = {}) {
     const opts = {
       method,
-      headers: { 'Content-Type': 'application/json', ...headers }
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.MCP_API_KEY,
+        ...headers
+      }
     };
     if (body !== null) {
       opts.body = JSON.stringify(body);
@@ -229,15 +227,16 @@ async function runTests() {
       genre: 'shadowrun'
     });
 
-    // User B tries to start a session on User A's project
+    // User B tries to start a session on User A's project -> 403 Forbidden, no Artifact/Note created
     const startOwnedRes = await apiReq(
       'POST',
       '/api/helix/session/start',
       { sessionId: 'sess-owned-check', projectId: 'book-owned', projectName: 'Hijacked Name' },
       { 'x-user-id': 'user-b', 'x-user-email': 'b@example.com' }
     );
-    assert.strictEqual(startOwnedRes.status, 200);
-    await apiReq('POST', '/api/helix/session/end', { sessionId: 'sess-owned-check' }, { 'x-user-id': 'user-b' });
+    assert.strictEqual(startOwnedRes.status, 403, 'session/start on another user project must return 403');
+    const leakedArtifact = await mongoDB.Artifact.findOne({ projectId: 'book-owned', id: 'transcript-sess-owned-check' }).lean();
+    assert.strictEqual(leakedArtifact, null, 'No transcript Artifact should be created on forbidden session/start');
 
     const ownedProjAfter = await mongoDB.Project.findOne({ id: 'book-owned' }).lean();
     assert.strictEqual(ownedProjAfter.userId, 'user-a', 'Existing project userId must not be overwritten by another user');
@@ -257,6 +256,109 @@ async function runTests() {
     const unownedProjAfter = await mongoDB.Project.findOne({ id: 'book-unowned' }).lean();
     assert.strictEqual(unownedProjAfter.userId, 'user-a', 'Unowned project should be claimed by session user');
     console.log('✓ Test 4 passed!');
+
+    // 5. Test POST /api/notes/summary-<id> & GET /api/notes/summary-<id> userId isolation + scalar attributes.projectId
+    console.log('5. Testing POST/GET /api/notes/summary-<id> userId isolation & scalar projectId...');
+    const postNoteRes = await apiReq(
+      'POST',
+      '/api/notes/summary-note-126',
+      {
+        projectId: 'book-a',
+        title: 'Run Summary (note-126)',
+        type: 'summary',
+        subtypeTag: 'summary',
+        attributes: {
+          type: 'summary',
+          subtypeTag: 'summary',
+          sessionId: 'note-126',
+          projectId: 'book-a',
+          summary: { text: 'Direct note summary', html: '<p>Direct note summary</p>' },
+          next_steps: { text: 'Direct next step', html: '<p>Direct next step</p>' }
+        }
+      },
+      { 'x-user-id': 'user-a' }
+    );
+    assert.strictEqual(postNoteRes.status, 200, 'POST /api/notes/summary-note-126 should succeed');
+    const savedDirectNote = await mongoDB.Note.findOne({ projectId: 'book-a', id: 'summary-note-126' }).lean();
+    assert.ok(savedDirectNote, 'Summary note should be persisted');
+    assert.strictEqual(savedDirectNote.userId, 'user-a', 'POST /api/notes should persist X-User-Id as userId');
+    assert.strictEqual(savedDirectNote.attributes.projectId, 'book-a', 'attributes.projectId must remain a scalar string');
+    assert.strictEqual(savedDirectNote.attributes.sessionId, 'note-126', 'attributes.sessionId must remain a scalar string');
+
+    // Cross-user overwrite via POST /api/notes must return 403
+    const forbiddenPostRes = await apiReq(
+      'POST',
+      '/api/notes/summary-note-126',
+      {
+        projectId: 'book-a',
+        title: 'Hijacked',
+        attributes: { summary: { text: 'Hijacked', html: '<p>Hijacked</p>' } }
+      },
+      { 'x-user-id': 'user-b' }
+    );
+    assert.strictEqual(forbiddenPostRes.status, 403, 'Cross-user POST /api/notes must return 403');
+
+    // GET /api/helix/summary/:id returns completed for owner, processing for other user
+    const helixDirectOwner = await apiReq(
+      'GET',
+      '/api/helix/summary/note-126?projectId=book-a',
+      null,
+      { 'x-user-id': 'user-a' }
+    );
+    assert.strictEqual(helixDirectOwner.status, 200);
+    assert.strictEqual(helixDirectOwner.data.status, 'completed');
+    assert.strictEqual(helixDirectOwner.data.projectId, 'book-a');
+
+    const helixDirectOther = await apiReq(
+      'GET',
+      '/api/helix/summary/note-126?projectId=book-a',
+      null,
+      { 'x-user-id': 'user-b' }
+    );
+    assert.strictEqual(helixDirectOther.status, 200);
+    assert.strictEqual(helixDirectOther.data.status, 'processing', 'GET /api/helix/summary must hide user-a note from user-b');
+
+    // GET /api/notes/summary-<id> enforces X-User-Id isolation
+    const getNoteOwner = await apiReq(
+      'GET',
+      '/api/notes/summary-note-126?projectId=book-a',
+      null,
+      { 'x-user-id': 'user-a' }
+    );
+    assert.strictEqual(getNoteOwner.status, 200, 'Owner should retrieve note via GET /api/notes');
+
+    const getNoteOther = await apiReq(
+      'GET',
+      '/api/notes/summary-note-126?projectId=book-a',
+      null,
+      { 'x-user-id': 'user-b' }
+    );
+    assert.strictEqual(getNoteOther.status, 404, 'Other user should get 404 via GET /api/notes');
+    console.log('✓ Test 5 passed!');
+
+    // 6. Test POST /api/helix/session/end forwards X-User-Id when activeSession is absent & does not overwrite another user's note
+    console.log('6. Testing POST /api/helix/session/end X-User-Id forwarding when activeSession is absent...');
+    const endNoActiveRes = await apiReq(
+      'POST',
+      '/api/helix/session/end',
+      { sessionId: 'sess-no-active-126', projectId: 'book-a' },
+      { 'x-user-id': 'user-a', 'x-user-email': 'a@example.com' }
+    );
+    assert.strictEqual(endNoActiveRes.status, 200);
+    const noActiveNote = await mongoDB.Note.findOne({ projectId: 'book-a', id: 'summary-sess-no-active-126' }).lean();
+    assert.ok(noActiveNote, 'Summary note should be created when activeSession is absent');
+    assert.strictEqual(noActiveNote.userId, 'user-a', 'session/end must forward X-User-Id when activeSession is absent');
+
+    // Attempting to end same sessionId + projectId as user-b must NOT overwrite user-a's note
+    await apiReq(
+      'POST',
+      '/api/helix/session/end',
+      { sessionId: 'sess-no-active-126', projectId: 'book-a' },
+      { 'x-user-id': 'user-b', 'x-user-email': 'b@example.com' }
+    );
+    const noActiveNoteAfter = await mongoDB.Note.findOne({ projectId: 'book-a', id: 'summary-sess-no-active-126' }).lean();
+    assert.strictEqual(noActiveNoteAfter.userId, 'user-a', 'session/end must not overwrite another user note');
+    console.log('✓ Test 6 passed!');
 
     console.log('All Issue #126 tests passed!');
   } finally {

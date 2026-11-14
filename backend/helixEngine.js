@@ -566,6 +566,9 @@ function setupHelixEngine(app, server) {
         userId: payload.userId || userId,
         userEmail: payload.userEmail || userEmail
       });
+      if (result && result.forbidden) {
+        return res.status(result.status || 403).json(result);
+      }
       if (result && result.conflict) {
         return res.status(409).json(result);
       }
@@ -595,7 +598,12 @@ function setupHelixEngine(app, server) {
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
       }
-      const result = await handleSessionEnd(payload);
+      const { userId, userEmail } = getHelixUserContext(req);
+      const result = await handleSessionEnd({
+        ...payload,
+        userId: userId || payload.userId || '',
+        userEmail: userEmail || payload.userEmail || ''
+      });
       const endedAt = (result && result.endedAt) || new Date().toISOString();
       const projectId = (result && result.projectId)
         || String(payload.projectId || payload.bookId || 'global').trim()
@@ -945,7 +953,14 @@ function setupHelixEngine(app, server) {
     // Upsert target Project with genre: "shadowrun" (never overwrite a project owned by another user)
     const existingProject = await Project.findOne({ id: projectId }).lean();
     const isOwnedByOther = Boolean(existingProject && existingProject.userId && sessionUserId && existingProject.userId !== sessionUserId);
-    if (!isOwnedByOther) {
+    if (isOwnedByOther) {
+      return {
+        forbidden: true,
+        status: 403,
+        error: 'Forbidden: project belongs to another user'
+      };
+    }
+    {
       const projectSet = {
         id: projectId,
         name: (existingProject && existingProject.name) || payload.projectName || projectId,
@@ -1183,35 +1198,38 @@ function setupHelixEngine(app, server) {
         $or: [{ projectId: 'global' }, { projectId: '' }, { projectId: { $exists: false } }]
       });
     }
-    if (!noteDoc) {
-      noteDoc = new Note({ projectId, id: summaryId });
-    }
-    noteDoc.projectId = projectId;
-    if (sessionUserId) {
-      noteDoc.userId = sessionUserId;
-    }
-    noteDoc.name = summaryTitle;
-    noteDoc.title = summaryTitle;
-    noteDoc.type = 'summary';
-    noteDoc.subtypeTag = 'summary';
-    noteDoc.content = '';
-    noteDoc.attributes = {
-      type: 'summary',
-      subtypeTag: 'summary',
-      sessionId,
-      projectId,
-      summary: {
-        text: structuredSummary.text,
-        html: structuredSummary.html
-      },
-      next_steps: {
-        text: structuredNextSteps.text,
-        html: structuredNextSteps.html
+    const noteOwnedByOther = Boolean(noteDoc && noteDoc.userId && sessionUserId && noteDoc.userId !== sessionUserId);
+    if (!noteOwnedByOther) {
+      if (!noteDoc) {
+        noteDoc = new Note({ projectId, id: summaryId });
       }
-    };
-    noteDoc.markModified('attributes');
-    noteDoc.lastEdited = new Date();
-    await noteDoc.save();
+      noteDoc.projectId = projectId;
+      if (sessionUserId) {
+        noteDoc.userId = sessionUserId;
+      }
+      noteDoc.name = summaryTitle;
+      noteDoc.title = summaryTitle;
+      noteDoc.type = 'summary';
+      noteDoc.subtypeTag = 'summary';
+      noteDoc.content = '';
+      noteDoc.attributes = {
+        type: 'summary',
+        subtypeTag: 'summary',
+        sessionId,
+        projectId,
+        summary: {
+          text: structuredSummary.text,
+          html: structuredSummary.html
+        },
+        next_steps: {
+          text: structuredNextSteps.text,
+          html: structuredNextSteps.html
+        }
+      };
+      noteDoc.markModified('attributes');
+      noteDoc.lastEdited = new Date();
+      await noteDoc.save();
+    }
 
     // Emit session_summary over WebSocket
     broadcastWs({
@@ -1246,7 +1264,13 @@ function setupHelixEngine(app, server) {
 
     if (action === 'session_start') {
       const result = await handleSessionStart(enrichedPayload);
-      if (result && result.conflict && ws && ws.readyState === WebSocket.OPEN) {
+      if (result && result.forbidden && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          action: 'session_error',
+          type: 'session_error',
+          ...result
+        }));
+      } else if (result && result.conflict && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           action: 'session_conflict',
           type: 'session_error',
