@@ -213,6 +213,9 @@ async function runTests() {
     }, { 'x-user-id': 'user-a', 'x-user-email': 'a@example.com' });
     assert.strictEqual(startARes.status, 200);
     assert.strictEqual(startARes.data.sessionId, 'sess-125-a');
+    assert.strictEqual(engine.getActiveSession().guildId, 'guild-seattle');
+    assert.strictEqual(engine.getActiveSession().channelId, 'chan-voice-1');
+    assert.strictEqual(engine.getActiveSession().language, 'de-DE');
 
     // Second start with different sessionId must return 409 conflict and NOT overwrite activeSession
     const conflictRes = await apiReq('POST', '/api/helix/session/start', {
@@ -266,6 +269,20 @@ async function runTests() {
 
     const noteA = await mongoDB.Note.findOne({ id: 'summary-sess-125-a' }).lean();
     assert.strictEqual(noteA.userId, 'user-a');
+
+    // Verify user-b's session start uses user-b's scoped HelixConfig when guildId/channelId/language are omitted
+    const startBRes = await apiReq('POST', '/api/helix/session/start', {
+      sessionId: 'sess-125-b-scoped',
+      projectId: 'proj-125-a'
+    }, { 'x-user-id': 'user-b', 'x-user-email': 'b@example.com' });
+    assert.strictEqual(startBRes.status, 200);
+    assert.strictEqual(engine.getActiveSession().guildId, 'guild-berlin');
+    assert.strictEqual(engine.getActiveSession().channelId, 'chan-voice-2');
+    assert.strictEqual(engine.getActiveSession().language, 'en-US');
+    const endBRes = await apiReq('POST', '/api/helix/session/end', {
+      sessionId: 'sess-125-b-scoped'
+    }, { 'x-user-id': 'user-b' });
+    assert.strictEqual(endBRes.status, 200);
 
     // Verify WS handshake header userId stamping
     const wsUserClient = new WebSocket(`ws://127.0.0.1:${port}/helix/ws?apiKey=${process.env.MCP_API_KEY}`, {
