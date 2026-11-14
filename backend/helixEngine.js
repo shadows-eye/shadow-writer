@@ -572,9 +572,13 @@ function setupHelixEngine(app, server) {
       const startedAt = (result && result.startedAt)
         || (activeSession && activeSession.sessionId === sessionId && activeSession.startedAt)
         || new Date().toISOString();
+      const projectId = (result && result.projectId)
+        || String(payload.projectId || payload.bookId || 'global').trim()
+        || 'global';
       res.json({
         success: true,
         sessionId,
+        projectId,
         status: 'active',
         startedAt
       });
@@ -593,9 +597,13 @@ function setupHelixEngine(app, server) {
       }
       const result = await handleSessionEnd(payload);
       const endedAt = (result && result.endedAt) || new Date().toISOString();
+      const projectId = (result && result.projectId)
+        || String(payload.projectId || payload.bookId || 'global').trim()
+        || 'global';
       res.json({
         success: true,
         sessionId,
+        projectId,
         status: 'ended',
         endedAt
       });
@@ -612,16 +620,26 @@ function setupHelixEngine(app, server) {
       if (!cleanId) {
         return res.json({ status: 'processing', jobId: '' });
       }
+      const { userId } = getHelixUserContext(req);
+      const projectId = String(req.query.projectId || req.query.bookId || '').trim();
+      const baseFilter = {};
+      if (projectId) {
+        baseFilter.projectId = projectId;
+      }
+      if (userId) {
+        baseFilter.userId = userId;
+      }
       const targetId = cleanId.startsWith('summary-') ? cleanId : `summary-${cleanId}`;
-      let noteDoc = await Note.findOne({ id: targetId }).lean();
+      let noteDoc = await Note.findOne({ ...baseFilter, id: targetId }).lean();
       if (!noteDoc && !cleanId.startsWith('summary-')) {
-        noteDoc = await Note.findOne({ id: cleanId }).lean();
+        noteDoc = await Note.findOne({ ...baseFilter, id: cleanId }).lean();
       }
       if (noteDoc) {
         const attrs = (noteDoc.attributes instanceof Map ? Object.fromEntries(noteDoc.attributes) : noteDoc.attributes) || {};
         return res.json({
           status: 'completed',
           jobId: cleanId,
+          projectId: noteDoc.projectId || projectId || '',
           sessionId: attrs.sessionId || cleanId,
           summary: attrs.summary || null,
           nextSteps: attrs.next_steps || attrs.nextSteps || null
@@ -896,7 +914,7 @@ function setupHelixEngine(app, server) {
 
   async function handleSessionStart(payload) {
     const sessionId = String(payload.sessionId || '').trim();
-    const projectId = String(payload.projectId || 'global').trim();
+    const projectId = String(payload.projectId || payload.bookId || 'global').trim() || 'global';
     if (!sessionId) return;
 
     if (activeSession && activeSession.sessionId !== sessionId) {
@@ -924,24 +942,33 @@ function setupHelixEngine(app, server) {
       }
     }
 
-    // Upsert target Project with genre: "shadowrun"
+    // Upsert target Project with genre: "shadowrun" (never overwrite a project owned by another user)
     const existingProject = await Project.findOne({ id: projectId }).lean();
-    const projectSet = {
-      id: projectId,
-      name: (existingProject && existingProject.name) || payload.projectName || projectId,
-      genre: 'shadowrun'
-    };
-    if (sessionUserId) {
-      projectSet.userId = sessionUserId;
+    const isOwnedByOther = Boolean(existingProject && existingProject.userId && sessionUserId && existingProject.userId !== sessionUserId);
+    if (!isOwnedByOther) {
+      const projectSet = {
+        id: projectId,
+        name: (existingProject && existingProject.name) || payload.projectName || projectId,
+        genre: (existingProject && existingProject.genre) || 'shadowrun'
+      };
+      const updateOp = { $set: projectSet };
+      if (existingProject && !existingProject.userId) {
+        if (sessionUserId) projectSet.userId = sessionUserId;
+        if (sessionUserEmail) projectSet.userEmail = sessionUserEmail;
+      } else if (!existingProject) {
+        const onInsert = {};
+        if (sessionUserId) onInsert.userId = sessionUserId;
+        if (sessionUserEmail) onInsert.userEmail = sessionUserEmail;
+        if (Object.keys(onInsert).length > 0) {
+          updateOp.$setOnInsert = onInsert;
+        }
+      }
+      await Project.findOneAndUpdate(
+        { id: projectId },
+        updateOp,
+        { upsert: true, new: true }
+      );
     }
-    if (sessionUserEmail) {
-      projectSet.userEmail = sessionUserEmail;
-    }
-    await Project.findOneAndUpdate(
-      { id: projectId },
-      { $set: projectSet },
-      { upsert: true, new: true }
-    );
 
     const startedAt = new Date().toISOString();
     const guildId = payload.guildId || config.guildId;
@@ -1003,6 +1030,7 @@ function setupHelixEngine(app, server) {
 
     return {
       sessionId,
+      projectId,
       startedAt
     };
   }
@@ -1063,7 +1091,8 @@ function setupHelixEngine(app, server) {
     const session = activeSession && activeSession.sessionId === sessionId ? activeSession : null;
     const endedAt = new Date().toISOString();
 
-    let projectId = session ? session.projectId : (payload.projectId || 'global');
+    const explicitProjectId = String((session && session.projectId) || payload.projectId || payload.bookId || '').trim();
+    let projectId = explicitProjectId || 'global';
     let dossier = session ? session.dossier : (payload.dossier || '');
     let language = session ? session.language : 'de-DE';
     let sessionUserId = session ? (session.userId || '') : String(payload.userId || '').trim();
@@ -1092,7 +1121,9 @@ function setupHelixEngine(app, server) {
     } else {
       const doc = await Artifact.findOne({ id: `transcript-${sessionId}` });
       if (doc) {
-        projectId = doc.projectId || projectId;
+        if (!explicitProjectId && doc.projectId) {
+          projectId = doc.projectId;
+        }
         sessionUserId = sessionUserId || doc.userId || '';
         const attrs = doc.attributes instanceof Map ? Object.fromEntries(doc.attributes) : (doc.attributes || {});
         const rendered = renderTranscriptFromEntries(attrs.entries || []);
@@ -1146,8 +1177,11 @@ function setupHelixEngine(app, server) {
     const summaryId = `summary-${sessionId}`;
     const summaryTitle = `Run Summary (${sessionId})`;
     let noteDoc = await Note.findOne({ projectId, id: summaryId });
-    if (!noteDoc) {
-      noteDoc = await Note.findOne({ id: summaryId });
+    if (!noteDoc && projectId === 'global') {
+      noteDoc = await Note.findOne({
+        id: summaryId,
+        $or: [{ projectId: 'global' }, { projectId: '' }, { projectId: { $exists: false } }]
+      });
     }
     if (!noteDoc) {
       noteDoc = new Note({ projectId, id: summaryId });
@@ -1165,6 +1199,7 @@ function setupHelixEngine(app, server) {
       type: 'summary',
       subtypeTag: 'summary',
       sessionId,
+      projectId,
       summary: {
         text: structuredSummary.text,
         html: structuredSummary.html
@@ -1182,12 +1217,14 @@ function setupHelixEngine(app, server) {
     broadcastWs({
       action: 'session_summary',
       sessionId,
+      projectId,
       summary: summaryList,
       next_steps: nextStepsList
     });
 
     return {
       sessionId,
+      projectId,
       endedAt
     };
   }
