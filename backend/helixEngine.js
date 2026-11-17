@@ -323,21 +323,11 @@ function setupHelixEngine(app, server) {
   function findVoiceChannelInCollection(channels, targetId) {
     if (!channels || !targetId) return null;
     const idStr = String(targetId);
-    if (channels.cache) {
-      if (typeof channels.cache.get === 'function') {
-        return channels.cache.get(idStr) || null;
-      }
-      if (Array.isArray(channels.cache)) {
-        return channels.cache.find((ch) => ch && String(ch.id) === idStr) || null;
-      }
-    }
-    if (typeof channels.get === 'function') {
-      return channels.get(idStr) || null;
-    }
-    if (Array.isArray(channels)) {
-      return channels.find((ch) => ch && String(ch.id) === idStr) || null;
-    }
-    return null;
+    const collection = channels.cache || channels;
+    const ch = typeof collection.get === 'function'
+      ? (collection.get(idStr) || null)
+      : (Array.isArray(collection) ? (collection.find((item) => item && String(item.id) === idStr) || null) : null);
+    return ch && VOICE_CHANNEL_TYPES.has(ch.type) ? ch : null;
   }
 
   function resolveVoiceChannelName(voiceState, channelId, guildId = '') {
@@ -356,7 +346,7 @@ function setupHelixEngine(app, server) {
 
     const guildChannels = voiceState && voiceState.guild && voiceState.guild.channels;
     const foundInGuild = findVoiceChannelInCollection(guildChannels, targetChannelId);
-    if (foundInGuild && VOICE_CHANNEL_TYPES.has(foundInGuild.type) && foundInGuild.name) {
+    if (foundInGuild && foundInGuild.name) {
       return String(foundInGuild.name);
     }
 

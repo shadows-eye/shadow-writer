@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.12] - 2026-11-17
+
+### Changed & Added
+- **Session-Only Bot Voice Connection & Member `channelName` Enrichment (#133)**:
+  - Removed passive voice-channel auto-join on Discord `clientReady` and `POST /api/helix/config` (`connectPassiveVoice` / `disconnectPassiveVoice`), keeping `session_start` as the sole trigger joining Discord voice and always tearing down STT/Opus/PCM streams, `activeSpeakers`, and the voice connection on `session_end` (supersedes `#131` passive always-connected behavior while preserving passive Gateway `voiceStateUpdate` tracking and `/api/helix/status` enrichment).
+  - Added `channelName` resolution (`resolveVoiceChannelName` / `findVoiceChannelInCollection`) across both `GET /api/helix/status` `members[]` and `/helix/ws` `voice_state_update` broadcasts from `VoiceState.channel.name`, `guild.channels`, and guild voice channels (returning `null` when out of voice or for non-voice/unknown channels).
+  - Added `backend/test_ticket_133_session_voice_channel_name.js` and aligned `test_ticket_129_status_voice_flags.js`, `test_ticket_130_voice_state_ws.js`, and `test_ticket_131_passive_speaking.js`.
+
 ## [1.9.11] - 2026-11-17
 
 ### Added
