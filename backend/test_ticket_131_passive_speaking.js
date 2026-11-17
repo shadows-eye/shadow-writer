@@ -8,6 +8,7 @@ const { PassThrough } = require('stream');
 
 process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/shadow_writer_test_131';
 process.env.MCP_API_KEY = process.env.MCP_API_KEY || 'test-helix-mcp-key-131';
+process.env.DISCORD_BOT_TOKEN = '';
 
 const mongoDB = require('./mongoDB');
 const { setupHelixEngine } = require('./helixEngine');
@@ -35,10 +36,9 @@ async function waitForCondition(predicate, timeoutMs = 2000, intervalMs = 25) {
 
 async function runTests() {
   await waitForConnection();
-  console.log('Connected to test MongoDB for Issue #131');
+  console.log('Connected to test MongoDB for Issue #131 (aligned with #133 session-only voice)');
 
   const testProjects = ['proj-131-a', 'proj-131-b'];
-  const testSessions = ['sess-131-1', 'sess-131-unconf', 'sess-131-diff'];
 
   await mongoDB.HelixConfig.deleteMany({ id: { $in: ['default', 'user:user-131'] } });
   await mongoDB.Artifact.deleteMany({ projectId: { $in: testProjects } });
@@ -197,49 +197,25 @@ async function runTests() {
       }
     });
 
-    // --- 1. Passive speaking without active session ---
-    console.log('1. Testing passive speaking without active session...');
-    assert.strictEqual(typeof engine.connectPassiveVoice, 'function', 'engine.connectPassiveVoice must be exposed');
-    engine.connectPassiveVoice({ guildId: 'g-131', channelId: 'ch-131' });
-    assert.strictEqual(joinVoiceChannelCallCount, 1, 'connectPassiveVoice must join voice channel once');
-    const passiveConn = createdConnections[0];
-    assert.ok(passiveConn, 'Passive voice connection must be created');
+    // --- 1. Passive auto-join is superseded by #133 ---
+    console.log('1. Verifying passive auto-join is removed and config save does NOT join voice...');
+    assert.strictEqual(engine.connectPassiveVoice, undefined, 'engine.connectPassiveVoice must not exist (#133)');
+    assert.strictEqual(engine.disconnectPassiveVoice, undefined, 'engine.disconnectPassiveVoice must not exist (#133)');
 
-    passiveConn.speakingEmitter.emit('start', 'd-1');
-    const passiveStart = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-1' && m.sessionId === null)
-    );
-    assert.ok(passiveStart, 'speaking_start must be broadcast over WS during passive monitoring');
-    assert.strictEqual(passiveStart.sessionId, null);
-    assert.strictEqual(passiveStart.discordId, 'd-1');
-    assert.strictEqual(passiveStart.foundryId, null);
-    assert.strictEqual(createSttStreamCallCount, 0, 'createSttStream MUST NOT be called without active session');
-    assert.strictEqual(createOpusDecoderCallCount, 0, 'createOpusDecoder MUST NOT be called without active session');
-    assert.strictEqual(subscribeCallCount, 0, 'receiver.subscribe MUST NOT be called without active session');
-
-    // Verify status reflects speaking: true in passive mode
-    const passiveStatusSpeaking = await apiReq('GET', '/api/helix/status');
-    assert.strictEqual(passiveStatusSpeaking.status, 200);
-    const passiveMemberSpeaking = passiveStatusSpeaking.data.members.find((m) => m.id === 'd-1');
-    assert.ok(passiveMemberSpeaking, 'Member d-1 must exist in status');
-    assert.strictEqual(passiveMemberSpeaking.speaking, true, 'Member speaking flag must be true during passive speaking');
-
-    passiveConn.speakingEmitter.emit('end', 'd-1');
-    const passiveStop = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_stop' && m.discordId === 'd-1' && m.sessionId === null)
-    );
-    assert.ok(passiveStop, 'speaking_stop must be broadcast over WS during passive monitoring');
-    assert.strictEqual(passiveStop.sessionId, null);
-    assert.strictEqual(passiveStop.discordId, 'd-1');
-    assert.strictEqual(passiveStop.foundryId, null);
-
-    const passiveStatusStopped = await apiReq('GET', '/api/helix/status');
-    const passiveMemberStopped = passiveStatusStopped.data.members.find((m) => m.id === 'd-1');
-    assert.strictEqual(passiveMemberStopped.speaking, false, 'Member speaking flag must be false after speaking stop');
+    const saveCfgRes = await apiReq('POST', '/api/helix/config', {
+      guildId: 'g-131',
+      channelId: 'ch-131',
+      language: 'de-DE'
+    });
+    assert.strictEqual(saveCfgRes.status, 200);
+    assert.strictEqual(joinVoiceChannelCallCount, 0, 'POST /api/helix/config must NOT join voice passively');
+    assert.strictEqual(createSttStreamCallCount, 0);
+    assert.strictEqual(createOpusDecoderCallCount, 0);
+    assert.strictEqual(subscribeCallCount, 0);
     console.log('✓ Test 1 passed!');
 
-    // --- 2. Transition into session_start reusing existing voice connection ---
-    console.log('2. Testing transition into session_start reusing existing voice connection...');
+    // --- 2. session_start connects once and runs speaking + STT pipeline ---
+    console.log('2. Testing session_start connects once and emits speaking + runs STT...');
     wsMessages.length = 0;
     wsClient.send(JSON.stringify({
       action: 'session_start',
@@ -252,25 +228,33 @@ async function runTests() {
       ]
     }));
 
-    const createdTranscript = await waitForCondition(async () => {
-      return mongoDB.Artifact.findOne({ id: 'transcript-sess-131-1' }).lean();
-    });
+    const createdTranscript = await waitForCondition(async () =>
+      mongoDB.Artifact.findOne({ id: 'transcript-sess-131-1' }).lean()
+    );
     assert.ok(createdTranscript, 'session_start must create transcript Artifact');
-    assert.strictEqual(joinVoiceChannelCallCount, 1, 'joinVoiceChannelCallCount must remain 1 when reusing matching passive connection');
+    assert.strictEqual(joinVoiceChannelCallCount, 1, 'session_start must join voice channel once');
+    const sessionConn = createdConnections[0];
+    assert.ok(sessionConn, 'Voice connection must be created on session_start');
 
-    passiveConn.speakingEmitter.emit('start', 'd-1');
+    sessionConn.speakingEmitter.emit('start', 'd-1');
     const activeStart = await waitForCondition(() =>
       wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-1' && m.sessionId === 'sess-131-1')
     );
     assert.ok(activeStart, 'speaking_start must carry active sessionId');
     assert.strictEqual(activeStart.foundryId, 'f-1');
     assert.strictEqual(createSttStreamCallCount, 1, 'createSttStream must be called once during active session');
+    assert.strictEqual(createOpusDecoderCallCount, 1, 'createOpusDecoder must be called once during active session');
     assert.strictEqual(subscribeCallCount, 1, 'receiver.subscribe must be called once during active session');
 
-    // Ensure listener was NOT attached twice
     await new Promise((r) => setTimeout(r, 50));
     const startCount = wsMessages.filter((m) => m.action === 'speaking_start' && m.discordId === 'd-1').length;
     assert.strictEqual(startCount, 1, 'speaking_start must only fire once per speak event (no duplicate listeners)');
+
+    const statusSpeaking = await apiReq('GET', '/api/helix/status');
+    assert.strictEqual(statusSpeaking.status, 200);
+    const memberSpeaking = statusSpeaking.data.members.find((m) => m.id === 'd-1');
+    assert.ok(memberSpeaking);
+    assert.strictEqual(memberSpeaking.speaking, true, 'Member speaking flag must be true during active speaking');
 
     const sttStream = activeUserSttStreams.get('d-1');
     assert.ok(sttStream, 'STT stream for d-1 must exist');
@@ -278,7 +262,7 @@ async function runTests() {
       results: [
         {
           isFinal: true,
-          alternatives: [{ transcript: 'Passive to active works.' }]
+          alternatives: [{ transcript: 'Active session speaking works.' }]
         }
       ]
     });
@@ -291,18 +275,21 @@ async function runTests() {
       return null;
     });
     assert.ok(updatedTranscript, 'Transcript Artifact must record final utterance');
-    assert.strictEqual(updatedTranscript.attributes.entries[0].text, 'Passive to active works.');
+    assert.strictEqual(updatedTranscript.attributes.entries[0].text, 'Active session speaking works.');
 
-    passiveConn.speakingEmitter.emit('end', 'd-1');
+    sessionConn.speakingEmitter.emit('end', 'd-1');
     const activeStop = await waitForCondition(() =>
       wsMessages.find((m) => m.action === 'speaking_stop' && m.discordId === 'd-1' && m.sessionId === 'sess-131-1')
     );
     assert.ok(activeStop, 'speaking_stop must carry active sessionId and foundryId');
     assert.strictEqual(activeStop.foundryId, 'f-1');
+
+    const statusStopped = await apiReq('GET', '/api/helix/status');
+    assert.strictEqual(statusStopped.data.members.find((m) => m.id === 'd-1').speaking, false);
     console.log('✓ Test 2 passed!');
 
-    // --- 3. Transition out via session_end preserving passive monitoring ---
-    console.log('3. Testing session_end preserves passive monitoring without STT...');
+    // --- 3. session_end tears down streams and destroys connection without reconnecting passively ---
+    console.log('3. Testing session_end tears down cleanly without reconnecting passively...');
     wsMessages.length = 0;
     wsClient.send(JSON.stringify({
       action: 'session_end',
@@ -316,40 +303,21 @@ async function runTests() {
     assert.strictEqual(endedSttStreams.includes('d-1'), true, 'STT stream must be ended on session_end');
     assert.strictEqual(destroyedOpusStreams.includes('d-1'), true, 'Opus stream must be destroyed on session_end');
     assert.ok(destroyedDecoders.length >= 1, 'PCM decoder must be destroyed on session_end');
-    assert.strictEqual(destroyCallCount, 0, 'voiceConnection.destroy() must NOT be called when passive monitoring is configured');
-    assert.strictEqual(passiveConn.destroyed, false);
+    assert.strictEqual(destroyCallCount, 1, 'voiceConnection.destroy() must be called on session_end');
+    assert.strictEqual(sessionConn.destroyed, true);
+    assert.strictEqual(joinVoiceChannelCallCount, 1, 'session_end must NOT reconnect passively');
 
-    // Emit passive speaking after session_end
+    // Detached speaking emitter must not emit WS events or open STT after session_end
     wsMessages.length = 0;
-    passiveConn.speakingEmitter.emit('start', 'd-1');
-    const postStart = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-1')
-    );
-    assert.ok(postStart, 'Passive speaking_start must still work after session_end');
-    assert.strictEqual(postStart.sessionId, null);
-    assert.strictEqual(postStart.foundryId, null);
-    assert.strictEqual(createSttStreamCallCount, 1, 'createSttStreamCallCount must STILL equal 1 after session_end');
-    assert.strictEqual(subscribeCallCount, 1, 'subscribeCallCount must STILL equal 1 after session_end');
-
-    passiveConn.speakingEmitter.emit('end', 'd-1');
-    const postStop = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_stop' && m.discordId === 'd-1')
-    );
-    assert.ok(postStop, 'Passive speaking_stop must still work after session_end');
-    assert.strictEqual(postStop.sessionId, null);
+    sessionConn.speakingEmitter.emit('start', 'd-1');
+    await new Promise((r) => setTimeout(r, 60));
+    assert.strictEqual(wsMessages.length, 0, 'Detached connection must not emit speaking_start after session_end');
+    assert.strictEqual(createSttStreamCallCount, 1, 'No STT stream must be created after teardown');
+    assert.strictEqual(subscribeCallCount, 1);
     console.log('✓ Test 3 passed!');
 
-    // --- 4. Unconfigured channel session_end teardown ---
-    console.log('4. Testing unconfigured channel session_end teardown...');
-    // Clear passive monitoring via POST /api/helix/config with empty guildId/channelId
-    const clearCfgRes = await apiReq('POST', '/api/helix/config', {
-      guildId: '',
-      channelId: '',
-      language: 'de-DE'
-    });
-    assert.strictEqual(clearCfgRes.status, 200);
-    assert.strictEqual(destroyCallCount, 1, 'Clearing config channel must destroy passive voice connection');
-
+    // --- 4. Second session on another guild/channel joins once and tears down cleanly ---
+    console.log('4. Testing second session on another guild/channel joins once and tears down cleanly...');
     wsMessages.length = 0;
     wsClient.send(JSON.stringify({
       action: 'session_start',
@@ -363,7 +331,7 @@ async function runTests() {
     }));
 
     await waitForCondition(async () => mongoDB.Artifact.findOne({ id: 'transcript-sess-131-unconf' }).lean());
-    assert.strictEqual(joinVoiceChannelCallCount, 2, 'New voice connection must be joined for unconfigured session');
+    assert.strictEqual(joinVoiceChannelCallCount, 2, 'New voice connection must be joined for second session');
     const unconfConn = createdConnections[1];
     assert.ok(unconfConn);
 
@@ -371,7 +339,7 @@ async function runTests() {
     await waitForCondition(() =>
       wsMessages.find((m) => m.action === 'speaking_start' && m.sessionId === 'sess-131-unconf')
     );
-    assert.strictEqual(createSttStreamCallCount, 2, 'STT stream must be created during unconfigured active session');
+    assert.strictEqual(createSttStreamCallCount, 2, 'STT stream must be created during second active session');
 
     wsClient.send(JSON.stringify({
       action: 'session_end',
@@ -381,95 +349,10 @@ async function runTests() {
       wsMessages.find((m) => m.action === 'session_summary' && m.sessionId === 'sess-131-unconf')
     );
 
-    assert.strictEqual(destroyCallCount, 2, 'Unconfigured channel voiceConnection must be destroyed on session_end');
+    assert.strictEqual(destroyCallCount, 2, 'Second session voiceConnection must be destroyed on session_end');
     assert.strictEqual(unconfConn.destroyed, true);
-
-    // Ensure speaking listeners were detached cleanly
-    wsMessages.length = 0;
-    unconfConn.speakingEmitter.emit('start', 'd-1');
-    await new Promise((r) => setTimeout(r, 60));
-    assert.strictEqual(wsMessages.length, 0, 'Detached connection must not emit speaking_start after teardown');
-    assert.strictEqual(createSttStreamCallCount, 2, 'No STT stream must be created after teardown');
+    assert.strictEqual(joinVoiceChannelCallCount, 2, 'No passive rejoin after second session_end');
     console.log('✓ Test 4 passed!');
-
-    // --- 5. POST /api/helix/config auto-connects passive voice when no activeSession ---
-    console.log('5. Testing POST /api/helix/config auto-connects passive voice...');
-    const saveCfgRes = await apiReq('POST', '/api/helix/config', {
-      guildId: 'g-131',
-      channelId: 'ch-131',
-      language: 'de-DE'
-    });
-    assert.strictEqual(saveCfgRes.status, 200);
-    assert.strictEqual(joinVoiceChannelCallCount, 3, 'POST /api/helix/config must trigger connectPassiveVoice when no activeSession');
-    const cfgConn = createdConnections[2];
-    assert.ok(cfgConn);
-
-    wsMessages.length = 0;
-    cfgConn.speakingEmitter.emit('start', 'd-2');
-    const cfgStart = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-2')
-    );
-    assert.ok(cfgStart, 'Auto-connected passive voice from POST /api/helix/config must emit speaking_start');
-    assert.strictEqual(cfgStart.sessionId, null);
-    assert.strictEqual(createSttStreamCallCount, 2, 'Auto-connected passive voice must NOT open STT stream');
-    cfgConn.speakingEmitter.emit('end', 'd-2');
-    await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_stop' && m.discordId === 'd-2')
-    );
-    console.log('✓ Test 5 passed!');
-
-    // --- 6. session_start for a different guild/channel destroys old passive connection ---
-    console.log('6. Testing session_start for a different channel destroys old passive connection...');
-    wsMessages.length = 0;
-    cfgConn.speakingEmitter.emit('start', 'd-2');
-    await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-2' && m.sessionId === null)
-    );
-    wsMessages.length = 0;
-
-    wsClient.send(JSON.stringify({
-      action: 'session_start',
-      sessionId: 'sess-131-diff',
-      projectId: 'proj-131-b',
-      guildId: 'g-unconf',
-      channelId: 'ch-unconf',
-      activePlayers: [{ foundryId: 'f-1', discordId: 'd-1', name: 'Razor' }]
-    }));
-    await waitForCondition(async () => mongoDB.Artifact.findOne({ id: 'transcript-sess-131-diff' }).lean());
-    assert.strictEqual(cfgConn.destroyed, true, 'Old passive connection for different channel must be destroyed');
-    assert.strictEqual(joinVoiceChannelCallCount, 4, 'New connection must be joined for different channel');
-
-    // Old connection speaking events must be detached
-    cfgConn.speakingEmitter.emit('start', 'd-2');
-    await new Promise((r) => setTimeout(r, 50));
-    assert.strictEqual(
-      wsMessages.some((m) => m.action === 'speaking_start' && m.discordId === 'd-2'),
-      false,
-      'Detached old passive connection must not emit speaking_start'
-    );
-
-    wsClient.send(JSON.stringify({
-      action: 'session_end',
-      sessionId: 'sess-131-diff'
-    }));
-    await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'session_summary' && m.sessionId === 'sess-131-diff')
-    );
-
-    // Passive monitoring on configured g-131/ch-131 must be restored cleanly after mismatched session ends
-    assert.strictEqual(joinVoiceChannelCallCount, 5, 'Configured passive voice connection must be restored on session_end');
-    const restoredConn = createdConnections[createdConnections.length - 1];
-    assert.strictEqual(restoredConn.guildId, 'g-131');
-    assert.strictEqual(restoredConn.channelId, 'ch-131');
-    wsMessages.length = 0;
-    const sttBeforeRestored = createSttStreamCallCount;
-    restoredConn.speakingEmitter.emit('start', 'd-2');
-    const restoredStart = await waitForCondition(() =>
-      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-2' && m.sessionId === null)
-    );
-    assert.ok(restoredStart, 'Restored passive connection must emit speaking_start with sessionId=null');
-    assert.strictEqual(createSttStreamCallCount, sttBeforeRestored, 'Restored passive connection must not open STT streams');
-    console.log('✓ Test 6 passed!');
 
     wsClient.close();
   } finally {
@@ -487,7 +370,7 @@ async function runTests() {
   }
 
   await mongoose.disconnect();
-  console.log('All Issue #131 tests passed!');
+  console.log('All Issue #131 (aligned with #133) tests passed!');
 }
 
 runTests().catch(async (err) => {
