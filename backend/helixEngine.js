@@ -105,6 +105,14 @@ function setupHelixEngine(app, server) {
   let mockDiscordState = null;
   let activeSession = null;
   const activeSpeakers = new Set();
+  let passiveMonitoringTarget = null;
+  const voiceConnectionState = {
+    connection: null,
+    guildId: '',
+    channelId: '',
+    detachSpeakingListeners: null,
+    detachLifecycleListeners: null
+  };
   let speechClient = null;
 
   let voiceDeps = {
@@ -165,10 +173,30 @@ function setupHelixEngine(app, server) {
           GatewayIntentBits.GuildMembers
         ]
       });
-      discordClient.once('clientReady', () => {
+      discordClient.once('clientReady', async () => {
         discordReady = true;
         console.log(`[Helix] Discord bot logged in as ${discordClient.user ? discordClient.user.tag : 'unknown'}`);
         updateBotPresence('idle');
+        try {
+          if (!activeSession) {
+            let cfg = await HelixConfig.findOne({
+              id: 'default',
+              guildId: { $exists: true, $ne: '' },
+              channelId: { $exists: true, $ne: '' }
+            }).lean();
+            if (!cfg) {
+              cfg = await HelixConfig.findOne({
+                guildId: { $exists: true, $ne: '' },
+                channelId: { $exists: true, $ne: '' }
+              }).sort({ updatedAt: -1 }).lean();
+            }
+            if (cfg && cfg.guildId && cfg.channelId) {
+              connectPassiveVoice({ guildId: cfg.guildId, channelId: cfg.channelId });
+            }
+          }
+        } catch (err) {
+          console.warn('[Helix] Failed to auto-connect passive voice on clientReady:', err.message);
+        }
       });
       discordClient.on('voiceStateUpdate', (oldState, newState) => handleVoiceStateUpdate(oldState, newState));
       discordClient.on('error', (err) => {
@@ -425,8 +453,14 @@ function setupHelixEngine(app, server) {
       const botTag = getBotTag();
       const guilds = getGuildsList();
       const installedGuildIds = guilds.map(g => String(g.id));
-      const connectedGuildId = (activeSession && activeSession.guildId) || config.guildId || null;
-      const connectedChannelId = (activeSession && activeSession.channelId) || config.channelId || null;
+      const connectedGuildId = (activeSession && activeSession.guildId)
+        || (voiceConnectionState.connection && voiceConnectionState.guildId)
+        || config.guildId
+        || null;
+      const connectedChannelId = (activeSession && activeSession.channelId)
+        || (voiceConnectionState.connection && voiceConnectionState.channelId)
+        || config.channelId
+        || null;
       const members = await getGuildMembers(connectedGuildId, connectedChannelId, config.roleId);
       const roles = getGuildRoles(connectedGuildId);
       const botStatus = {
@@ -579,6 +613,18 @@ function setupHelixEngine(app, server) {
         language: updated.language || 'de-DE',
         updatedAt: updated.updatedAt ? new Date(updated.updatedAt).toISOString() : updatedAt.toISOString()
       };
+
+      if (!activeSession) {
+        if (nextGuildId && nextChannelId) {
+          connectPassiveVoice({ guildId: nextGuildId, channelId: nextChannelId });
+        } else {
+          disconnectPassiveVoice();
+        }
+      } else if (voiceDeps.joinVoiceChannel || (discordClient && discordReady)) {
+        passiveMonitoringTarget = (nextGuildId && nextChannelId)
+          ? { guildId: nextGuildId, channelId: nextChannelId }
+          : null;
+      }
 
       res.json({
         success: true,
@@ -739,6 +785,10 @@ function setupHelixEngine(app, server) {
     const discordId = rawDiscordId ? String(rawDiscordId) : null;
     if (!discordId) return;
 
+    if (!next.channelId) {
+      activeSpeakers.delete(discordId);
+    }
+
     broadcastWs({
       action: 'voice_state_update',
       guildId,
@@ -859,8 +909,32 @@ function setupHelixEngine(app, server) {
     } catch (e) {}
   }
 
-  function attachVoiceConnectionLifecycle(session, voiceConnection) {
-    if (!voiceConnection || typeof voiceConnection.on !== 'function') return;
+  function destroyVoiceConnection() {
+    if (typeof voiceConnectionState.detachSpeakingListeners === 'function') {
+      voiceConnectionState.detachSpeakingListeners();
+    }
+    voiceConnectionState.detachSpeakingListeners = null;
+
+    if (typeof voiceConnectionState.detachLifecycleListeners === 'function') {
+      voiceConnectionState.detachLifecycleListeners();
+    }
+    voiceConnectionState.detachLifecycleListeners = null;
+
+    if (voiceConnectionState.connection && typeof voiceConnectionState.connection.destroy === 'function') {
+      try {
+        voiceConnectionState.connection.destroy();
+      } catch (err) {
+        console.warn('[Helix] Error destroying voice connection:', err.message);
+      }
+    }
+    voiceConnectionState.connection = null;
+    voiceConnectionState.guildId = '';
+    voiceConnectionState.channelId = '';
+    activeSpeakers.clear();
+  }
+
+  function attachVoiceConnectionLifecycle(voiceConnection) {
+    if (!voiceConnection || typeof voiceConnection.on !== 'function') return null;
 
     const onStateChange = (oldState, newState) => {
       const oldStatus = oldState && oldState.status;
@@ -891,7 +965,7 @@ function setupHelixEngine(app, server) {
     voiceConnection.on(VoiceConnectionStatus.Destroyed, onDisconnect);
     voiceConnection.on('error', onError);
 
-    session._detachVoiceConnectionListeners = () => {
+    return () => {
       const off = typeof voiceConnection.off === 'function'
         ? voiceConnection.off.bind(voiceConnection)
         : (typeof voiceConnection.removeListener === 'function'
@@ -907,112 +981,120 @@ function setupHelixEngine(app, server) {
     };
   }
 
-  function attachVoiceReceiver(session, voiceConnection) {
+  function startUserSttPipeline(session, receiver, discordId, playerInfo) {
+    const foundryId = playerInfo ? playerInfo.foundryId : null;
+    const speakerName = (playerInfo && (playerInfo.name || playerInfo.foundryId)) || discordId;
+    console.log(`[Helix] Speaking start: ${speakerName} (${discordId})`);
+
+    // Clean up any existing stream for this user before opening a new one
+    cleanupUserStream(session, discordId);
+
+    try {
+      const opusStream = receiver.subscribe(discordId, {
+        end: {
+          behavior: EndBehaviorType.AfterSilence,
+          duration: 1000
+        }
+      });
+
+      const pcmDecoder = voiceDeps.createOpusDecoder
+        ? voiceDeps.createOpusDecoder()
+        : new prism.opus.Decoder({ rate: 48000, channels: 1, frameSize: 960 });
+
+      const recognizeConfig = {
+        config: {
+          encoding: 'LINEAR16',
+          sampleRateHertz: 48000,
+          languageCode: session.language || 'de-DE',
+          enableAutomaticPunctuation: true
+        },
+        interimResults: false
+      };
+
+      const sttStream = voiceDeps.createSttStream
+        ? voiceDeps.createSttStream(recognizeConfig, discordId)
+        : getSpeechClient().streamingRecognize(recognizeConfig);
+
+      session.userStreams.set(discordId, { opusStream, pcmDecoder, sttStream });
+
+      sttStream.on('data', (data) => {
+        if (!activeSession || activeSession.sessionId !== session.sessionId) return;
+        if (!data || !Array.isArray(data.results)) return;
+        for (const result of data.results) {
+          if (!result || result.isFinal === false) continue;
+          const alt = Array.isArray(result.alternatives) && result.alternatives[0];
+          const transcriptText = alt && alt.transcript ? String(alt.transcript).trim() : '';
+          if (!transcriptText) continue;
+
+          console.log(`[Helix] Transcript (${speakerName}): ${transcriptText}`);
+          session.entries.push({
+            kind: 'utterance',
+            timestamp: new Date().toISOString(),
+            discordId,
+            foundryId,
+            speaker: speakerName,
+            text: transcriptText
+          });
+          queueTranscriptSave(session);
+        }
+      });
+
+      sttStream.on('error', (err) => {
+        console.warn(`[Helix] STT stream error for user ${discordId}:`, err.message);
+      });
+      opusStream.on('error', (err) => {
+        console.warn(`[Helix] Opus stream error for user ${discordId}:`, err.message);
+      });
+      pcmDecoder.on('error', (err) => {
+        console.warn(`[Helix] PCM decoder error for user ${discordId}:`, err.message);
+      });
+
+      opusStream.pipe(pcmDecoder).pipe(sttStream);
+    } catch (err) {
+      console.warn(`[Helix] Failed to subscribe/decode voice stream for ${discordId}:`, err.message);
+    }
+  }
+
+  function attachVoiceReceiver(voiceConnection) {
     if (!voiceConnection || !voiceConnection.receiver || !voiceConnection.receiver.speaking) {
-      return;
+      return null;
     }
     const receiver = voiceConnection.receiver;
 
     const onSpeakingStart = (userId) => {
-      if (!activeSession || activeSession.sessionId !== session.sessionId) return;
       const discordId = String(userId);
       activeSpeakers.add(discordId);
-      const playerInfo = session.playerMap.get(discordId) || null;
+      const session = activeSession;
+      const playerInfo = session && session.playerMap ? (session.playerMap.get(discordId) || null) : null;
       const foundryId = playerInfo ? playerInfo.foundryId : null;
-      const speakerName = (playerInfo && (playerInfo.name || playerInfo.foundryId)) || discordId;
-      console.log(`[Helix] Speaking start: ${speakerName} (${discordId})`);
 
-      // Immediately emit speaking_start over WebSocket
+      // Immediately emit speaking_start over WebSocket (sessionId/foundryId are null in passive mode)
       broadcastWs({
         action: 'speaking_start',
-        sessionId: session.sessionId,
+        sessionId: session ? session.sessionId : null,
         discordId,
         foundryId
       });
 
-      // Clean up any existing stream for this user before opening a new one
-      cleanupUserStream(session, discordId);
-
-      try {
-        const opusStream = receiver.subscribe(discordId, {
-          end: {
-            behavior: EndBehaviorType.AfterSilence,
-            duration: 1000
-          }
-        });
-
-        const pcmDecoder = voiceDeps.createOpusDecoder
-          ? voiceDeps.createOpusDecoder()
-          : new prism.opus.Decoder({ rate: 48000, channels: 1, frameSize: 960 });
-
-        const recognizeConfig = {
-          config: {
-            encoding: 'LINEAR16',
-            sampleRateHertz: 48000,
-            languageCode: session.language || 'de-DE',
-            enableAutomaticPunctuation: true
-          },
-          interimResults: false
-        };
-
-        const sttStream = voiceDeps.createSttStream
-          ? voiceDeps.createSttStream(recognizeConfig, discordId)
-          : getSpeechClient().streamingRecognize(recognizeConfig);
-
-        session.userStreams.set(discordId, { opusStream, pcmDecoder, sttStream });
-
-        sttStream.on('data', (data) => {
-          if (!activeSession || activeSession.sessionId !== session.sessionId) return;
-          if (!data || !Array.isArray(data.results)) return;
-          for (const result of data.results) {
-            if (!result) continue;
-            if (result.isFinal === false) continue;
-            const alt = Array.isArray(result.alternatives) && result.alternatives[0];
-            const transcriptText = alt && alt.transcript ? String(alt.transcript).trim() : '';
-            if (!transcriptText) continue;
-
-            console.log(`[Helix] Transcript (${speakerName}): ${transcriptText}`);
-            session.entries.push({
-              kind: 'utterance',
-              timestamp: new Date().toISOString(),
-              discordId,
-              foundryId,
-              speaker: speakerName,
-              text: transcriptText
-            });
-            queueTranscriptSave(session);
-          }
-        });
-
-        sttStream.on('error', (err) => {
-          console.warn(`[Helix] STT stream error for user ${discordId}:`, err.message);
-        });
-
-        opusStream.on('error', (err) => {
-          console.warn(`[Helix] Opus stream error for user ${discordId}:`, err.message);
-        });
-
-        pcmDecoder.on('error', (err) => {
-          console.warn(`[Helix] PCM decoder error for user ${discordId}:`, err.message);
-        });
-
-        opusStream.pipe(pcmDecoder).pipe(sttStream);
-      } catch (err) {
-        console.warn(`[Helix] Failed to subscribe/decode voice stream for ${discordId}:`, err.message);
+      // Only open Opus/PCM/STT pipelines when an active recording session is running
+      if (!session) {
+        return;
       }
+
+      startUserSttPipeline(session, receiver, discordId, playerInfo);
     };
 
     const onSpeakingEnd = (userId) => {
-      if (!activeSession || activeSession.sessionId !== session.sessionId) return;
       const discordId = String(userId);
       activeSpeakers.delete(discordId);
-      const playerInfo = session.playerMap.get(discordId) || null;
+      const session = activeSession;
+      const playerInfo = session && session.playerMap ? (session.playerMap.get(discordId) || null) : null;
       const foundryId = playerInfo ? playerInfo.foundryId : null;
 
       // Immediately emit speaking_stop over WebSocket
       broadcastWs({
         action: 'speaking_stop',
-        sessionId: session.sessionId,
+        sessionId: session ? session.sessionId : null,
         discordId,
         foundryId
       });
@@ -1020,7 +1102,7 @@ function setupHelixEngine(app, server) {
 
     receiver.speaking.on('start', onSpeakingStart);
     receiver.speaking.on('end', onSpeakingEnd);
-    session._detachSpeakingListeners = () => {
+    return () => {
       try {
         if (typeof receiver.speaking.off === 'function') {
           receiver.speaking.off('start', onSpeakingStart);
@@ -1031,6 +1113,99 @@ function setupHelixEngine(app, server) {
         }
       } catch (e) {}
     };
+  }
+
+  function ensureVoiceConnection(guildId, channelId, logLabel = '') {
+    const targetGuildId = guildId ? String(guildId).trim() : '';
+    const targetChannelId = channelId ? String(channelId).trim() : '';
+
+    if (voiceConnectionState.connection) {
+      const sameTarget = Boolean(
+        targetGuildId &&
+        targetChannelId &&
+        voiceConnectionState.guildId === targetGuildId &&
+        voiceConnectionState.channelId === targetChannelId &&
+        !voiceConnectionState.connection.destroyed
+      );
+      if (sameTarget) {
+        return voiceConnectionState.connection;
+      }
+      destroyVoiceConnection();
+    }
+
+    let conn = null;
+    if (voiceDeps.joinVoiceChannel) {
+      try {
+        conn = voiceDeps.joinVoiceChannel({
+          guildId: targetGuildId || guildId,
+          channelId: targetChannelId || channelId
+        });
+      } catch (err) {
+        console.warn('[Helix] Injected joinVoiceChannel error:', err.message);
+      }
+    } else if (discordClient && discordReady && targetGuildId && targetChannelId) {
+      try {
+        const guild = discordClient.guilds.cache.get(targetGuildId);
+        if (guild && guild.voiceAdapterCreator) {
+          console.log(`[Helix] Joining voice channel ${targetChannelId} in guild ${targetGuildId}${logLabel ? ` (${logLabel})` : ''}`);
+          conn = discordJoinVoiceChannel({
+            channelId: targetChannelId,
+            guildId: targetGuildId,
+            adapterCreator: guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: true
+          });
+        } else {
+          console.warn(`[Helix] Could not join voice: guild ${targetGuildId} not found in cache or missing voiceAdapterCreator`);
+        }
+      } catch (err) {
+        console.warn('[Helix] Discord joinVoiceChannel error:', err.message);
+      }
+    } else {
+      console.warn(`[Helix] Voice join skipped: discordReady=${discordReady}, guildId=${targetGuildId || 'none'}, channelId=${targetChannelId || 'none'}`);
+    }
+
+    if (!conn) return null;
+
+    voiceConnectionState.connection = conn;
+    voiceConnectionState.guildId = targetGuildId;
+    voiceConnectionState.channelId = targetChannelId;
+    voiceConnectionState.detachLifecycleListeners = attachVoiceConnectionLifecycle(conn);
+    voiceConnectionState.detachSpeakingListeners = attachVoiceReceiver(conn);
+    return conn;
+  }
+
+  function connectPassiveVoice({ guildId, channelId } = {}) {
+    const cleanGuildId = String(guildId || '').trim();
+    const cleanChannelId = String(channelId || '').trim();
+    if (!cleanGuildId || !cleanChannelId) {
+      return null;
+    }
+    if (!voiceDeps.joinVoiceChannel && !(discordClient && discordReady)) {
+      return null;
+    }
+    passiveMonitoringTarget = {
+      guildId: cleanGuildId,
+      channelId: cleanChannelId
+    };
+    if (activeSession) {
+      if (
+        voiceConnectionState.connection &&
+        voiceConnectionState.guildId === cleanGuildId &&
+        voiceConnectionState.channelId === cleanChannelId
+      ) {
+        return voiceConnectionState.connection;
+      }
+      return null;
+    }
+    return ensureVoiceConnection(cleanGuildId, cleanChannelId, 'passive');
+  }
+
+  function disconnectPassiveVoice() {
+    passiveMonitoringTarget = null;
+    if (!activeSession && voiceConnectionState.connection) {
+      destroyVoiceConnection();
+    }
   }
 
   async function handleSessionStart(payload) {
@@ -1101,7 +1276,6 @@ function setupHelixEngine(app, server) {
     const startedAt = new Date().toISOString();
     const guildId = payload.guildId || config.guildId;
     const channelId = payload.channelId || config.channelId;
-    activeSpeakers.clear();
     activeSession = {
       sessionId,
       projectId,
@@ -1125,43 +1299,10 @@ function setupHelixEngine(app, server) {
     await queueTranscriptSave(activeSession);
     updateBotPresence('recording');
 
-    // Connect Discord voice channel
-
-    if (voiceDeps.joinVoiceChannel) {
-      try {
-        const conn = voiceDeps.joinVoiceChannel({
-          guildId,
-          channelId
-        });
-        activeSession.voiceConnection = conn;
-        attachVoiceConnectionLifecycle(activeSession, conn);
-        attachVoiceReceiver(activeSession, conn);
-      } catch (err) {
-        console.warn('[Helix] Injected joinVoiceChannel error:', err.message);
-      }
-    } else if (discordClient && discordReady && guildId && channelId) {
-      try {
-        const guild = discordClient.guilds.cache.get(String(guildId));
-        if (guild && guild.voiceAdapterCreator) {
-          console.log(`[Helix] Joining voice channel ${channelId} in guild ${guildId} for session ${sessionId}`);
-          const conn = discordJoinVoiceChannel({
-            channelId: String(channelId),
-            guildId: String(guildId),
-            adapterCreator: guild.voiceAdapterCreator,
-            selfDeaf: false,
-            selfMute: true
-          });
-          activeSession.voiceConnection = conn;
-          attachVoiceConnectionLifecycle(activeSession, conn);
-          attachVoiceReceiver(activeSession, conn);
-        } else {
-          console.warn(`[Helix] Could not join voice: guild ${guildId} not found in cache or missing voiceAdapterCreator`);
-        }
-      } catch (err) {
-        console.warn('[Helix] Discord joinVoiceChannel error:', err.message);
-      }
-    } else {
-      console.warn(`[Helix] Voice join skipped: discordReady=${discordReady}, guildId=${guildId || 'none'}, channelId=${channelId || 'none'}`);
+    // Connect or reuse Discord voice channel
+    const conn = ensureVoiceConnection(guildId, channelId, `session ${sessionId}`);
+    if (conn) {
+      activeSession.voiceConnection = conn;
     }
 
     return {
@@ -1234,26 +1375,35 @@ function setupHelixEngine(app, server) {
     let sessionUserId = session ? (session.userId || '') : String(payload.userId || '').trim();
     let transcriptText = '';
 
-    activeSpeakers.clear();
-
     if (session) {
-      if (typeof session._detachSpeakingListeners === 'function') {
-        session._detachSpeakingListeners();
-      }
-      if (session.voiceConnection && typeof session.voiceConnection.destroy === 'function') {
-        try {
-          session.voiceConnection.destroy();
-        } catch (err) {
-          console.warn('[Helix] Error destroying voice connection:', err.message);
-        }
-      }
-      if (typeof session._detachVoiceConnectionListeners === 'function') {
-        session._detachVoiceConnectionListeners();
-      }
       for (const dId of Array.from(session.userStreams.keys())) {
         cleanupUserStream(session, dId);
       }
-      activeSpeakers.clear();
+
+      const keepPassive = Boolean(
+        passiveMonitoringTarget &&
+        session.guildId &&
+        session.channelId &&
+        passiveMonitoringTarget.guildId === session.guildId &&
+        passiveMonitoringTarget.channelId === session.channelId
+      );
+
+      if (!keepPassive) {
+        const previousStateConn = voiceConnectionState.connection;
+        destroyVoiceConnection();
+        if (
+          session.voiceConnection &&
+          session.voiceConnection !== previousStateConn &&
+          typeof session.voiceConnection.destroy === 'function'
+        ) {
+          try {
+            session.voiceConnection.destroy();
+          } catch (err) {
+            console.warn('[Helix] Error destroying voice connection:', err.message);
+          }
+        }
+        activeSpeakers.clear();
+      }
       session.endedAt = endedAt;
       await queueTranscriptSave(session);
       const rendered = renderTranscriptFromEntries(session.entries);
@@ -1476,6 +1626,8 @@ function setupHelixEngine(app, server) {
         ...deps
       };
     },
+    connectPassiveVoice,
+    disconnectPassiveVoice,
     getActiveSession() {
       return activeSession;
     },
