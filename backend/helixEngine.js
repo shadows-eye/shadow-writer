@@ -21,6 +21,29 @@ const VOICE_CHANNEL_TYPES = new Set([
   13
 ]);
 
+const VOICE_STATE_KEYS = ['channelId', 'mute', 'selfMute', 'serverMute', 'deaf', 'selfDeaf', 'serverDeaf'];
+
+function isBotMember(member) {
+  if (!member) return false;
+  return Boolean((member.user && member.user.bot === true) || member.bot || member.isBot);
+}
+
+function normalizeVoiceState(state) {
+  return {
+    channelId: state && state.channelId ? String(state.channelId) : null,
+    mute: Boolean(state && state.mute),
+    selfMute: Boolean(state && state.selfMute),
+    serverMute: Boolean(state && state.serverMute),
+    deaf: Boolean(state && state.deaf),
+    selfDeaf: Boolean(state && state.selfDeaf),
+    serverDeaf: Boolean(state && state.serverDeaf)
+  };
+}
+
+function hasVoiceStateChanged(prev, next) {
+  return VOICE_STATE_KEYS.some((key) => prev[key] !== next[key]);
+}
+
 function escapeHtml(str) {
   return String(str || '')
     .replace(/&/g, '&amp;')
@@ -146,6 +169,7 @@ function setupHelixEngine(app, server) {
         console.log(`[Helix] Discord bot logged in as ${discordClient.user ? discordClient.user.tag : 'unknown'}`);
         updateBotPresence('idle');
       });
+      discordClient.on('voiceStateUpdate', (oldState, newState) => handleVoiceStateUpdate(oldState, newState));
       discordClient.on('error', (err) => {
         console.error('[Helix] Discord client error:', err.message);
       });
@@ -288,7 +312,7 @@ function setupHelixEngine(app, server) {
         rawMembers = mockDiscordState.members;
       }
       return rawMembers
-        .filter(m => !m.bot && !(m.user && m.user.bot) && !m.isBot)
+        .filter(m => !isBotMember(m))
         .filter(m => !targetRoleId || memberHasRole(m, targetRoleId))
         .map(m => {
           const user = m.user || {};
@@ -327,10 +351,7 @@ function setupHelixEngine(app, server) {
       }
       if (memberCollection) {
         return Array.from(memberCollection.values())
-          .filter(m => {
-            const user = m.user || {};
-            return !user.bot && !m.bot;
-          })
+          .filter(m => !isBotMember(m))
           .filter(m => !targetRoleId || memberHasRole(m, targetRoleId))
           .map(m => {
             const user = m.user || {};
@@ -688,6 +709,39 @@ function setupHelixEngine(app, server) {
         }
       }
     }
+  }
+
+  function handleVoiceStateUpdate(oldState, newState) {
+    if (!oldState && !newState) return;
+    const member = (newState && newState.member) || (oldState && oldState.member) || null;
+    if (isBotMember(member) || isBotMember(oldState && oldState.member)) return;
+
+    const prev = normalizeVoiceState(oldState);
+    const next = normalizeVoiceState(newState);
+    if (!hasVoiceStateChanged(prev, next)) return;
+
+    const rawGuildId = (newState && ((newState.guild && newState.guild.id) || newState.guildId))
+      || (oldState && ((oldState.guild && oldState.guild.id) || oldState.guildId))
+      || '';
+    const rawDiscordId = (newState && (newState.id || (newState.member && (newState.member.id || (newState.member.user && newState.member.user.id)))))
+      || (oldState && (oldState.id || (oldState.member && (oldState.member.id || (oldState.member.user && oldState.member.user.id)))))
+      || '';
+
+    const guildId = rawGuildId ? String(rawGuildId) : null;
+    const discordId = rawDiscordId ? String(rawDiscordId) : null;
+    if (!discordId) return;
+
+    broadcastWs({
+      action: 'voice_state_update',
+      guildId,
+      discordId,
+      inVoice: Boolean(next.channelId),
+      channelId: next.channelId,
+      muted: Boolean(next.mute || next.selfMute || next.serverMute),
+      selfMute: Boolean(next.selfMute),
+      serverMute: Boolean(next.serverMute),
+      deaf: Boolean(next.deaf || next.selfDeaf || next.serverDeaf)
+    });
   }
 
   async function verifyApiKey(candidateKey) {
@@ -1363,7 +1417,8 @@ function setupHelixEngine(app, server) {
     },
     getActiveSession() {
       return activeSession;
-    }
+    },
+    handleVoiceStateUpdate
   };
 
   return engine;
