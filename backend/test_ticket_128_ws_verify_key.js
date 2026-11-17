@@ -202,6 +202,82 @@ async function runTests() {
     assert.strictEqual(recordedRequests.length, 0);
     console.log('✓ Missing key closed with 4001!');
 
+    // 6. Valid first-frame auth ({ action: 'auth', apiKey }) with NO query string -> auth_ok -> stays OPEN
+    console.log('6. Testing /helix/ws first-frame auth with valid license key (no query string)...');
+    recordedRequests.length = 0;
+    const wsFirstFrame = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/helix/ws`);
+      const timer = setTimeout(() => {
+        ws.terminate();
+        reject(new Error('Timed out waiting for first-frame auth_ok'));
+      }, 5000);
+      ws.once('open', () => {
+        ws.send(JSON.stringify({ action: 'auth', apiKey: VALID_LICENSE_KEY }));
+      });
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.action === 'auth_ok') {
+          clearTimeout(timer);
+          resolve(ws);
+        }
+      });
+      ws.once('close', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`WS closed unexpectedly with code=${code}`));
+      });
+      ws.once('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    assert.strictEqual(wsFirstFrame.readyState, WebSocket.OPEN);
+    assert.strictEqual(recordedRequests.length, 1);
+    assert.strictEqual(recordedRequests[0].method, 'POST');
+    assert.strictEqual(recordedRequests[0].headers['x-api-key'], VALID_LICENSE_KEY);
+    await new Promise((r) => {
+      wsFirstFrame.once('close', r);
+      wsFirstFrame.close();
+    });
+    console.log('✓ First-frame auth succeeded without query-string key!');
+
+    // 7. Invalid first-frame auth -> closes with 4001
+    console.log('7. Testing /helix/ws first-frame auth closes with 4001 on invalid key...');
+    const closeInvalidFrame = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/helix/ws`);
+      const timer = setTimeout(() => {
+        ws.terminate();
+        reject(new Error('Timed out waiting for close 4001 on invalid first-frame auth'));
+      }, 5000);
+      ws.once('open', () => {
+        ws.send(JSON.stringify({ action: 'auth', apiKey: INVALID_LICENSE_KEY }));
+      });
+      ws.once('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    assert.strictEqual(closeInvalidFrame, 4001);
+    console.log('✓ Invalid first-frame auth closed with 4001!');
+
+    // 8. Non-auth first frame before authenticating -> closes with 4001
+    console.log('8. Testing /helix/ws closes with 4001 on non-auth first frame...');
+    const closeNonAuthFrame = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/helix/ws`);
+      const timer = setTimeout(() => {
+        ws.terminate();
+        reject(new Error('Timed out waiting for close 4001 on non-auth first frame'));
+      }, 5000);
+      ws.once('open', () => {
+        ws.send(JSON.stringify({ action: 'session_marker', label: 'unauth' }));
+      });
+      ws.once('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    assert.strictEqual(closeNonAuthFrame, 4001);
+    console.log('✓ Non-auth first frame closed with 4001!');
+
     console.log('All Ticket #128 WS verify-key tests passed!');
   } finally {
     await new Promise((resolve) => server.close(resolve));

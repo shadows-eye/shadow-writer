@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.11] - 2026-11-17
+
+### Added
+- **First-Frame `/helix/ws` WebSocket Authentication (`backend/helixEngine.js`, `backend/test_ticket_128_ws_verify_key.js`)**:
+  - Added support for first-frame WebSocket authentication (`{"action":"auth","apiKey":"..."}` → `{"action":"auth_ok"}`) with a `2000ms` pending-auth timeout and fail-closed `4001 Unauthorized` closure on invalid, malformed, timed-out, or non-auth frames so browser clients avoid exposing API keys in `?apiKey=` query strings.
+  - Preserved full backward compatibility for handshake `?apiKey=` query parameters and `x-api-key` headers.
+
 ## [1.9.10] - 2026-11-17
 
 ### Added & Fixed

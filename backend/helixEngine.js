@@ -1569,12 +1569,62 @@ function setupHelixEngine(app, server) {
     wss.on('connection', async (ws, req) => {
       let authResolved = false;
       let isAuthorized = false;
+      let authTimeout = null;
       const wsUserContext = getHelixUserContext(req);
       const pendingMessages = [];
 
-      ws.on('message', (data) => {
+      const closeUnauthorized = () => {
+        if (authTimeout) {
+          clearTimeout(authTimeout);
+          authTimeout = null;
+        }
+        authResolved = true;
+        isAuthorized = false;
+        pendingMessages.length = 0;
+        authenticatedClients.delete(ws);
+        try {
+          ws.close(4001, 'Unauthorized');
+        } catch (_) {}
+      };
+
+      const authorizeConnection = async (candidateKey) => {
+        const valid = await verifyApiKey(candidateKey);
+        if (!valid) {
+          closeUnauthorized();
+          return false;
+        }
+        if (authTimeout) {
+          clearTimeout(authTimeout);
+          authTimeout = null;
+        }
+        authResolved = true;
+        isAuthorized = true;
+        authenticatedClients.add(ws);
+        return true;
+      };
+
+      ws.on('message', async (data) => {
         if (!authResolved) {
-          pendingMessages.push(data);
+          // Await first-frame auth when no handshake key was supplied
+          let frame;
+          try {
+            frame = typeof data === 'string' ? JSON.parse(data) : JSON.parse(data.toString());
+          } catch (_) {
+            closeUnauthorized();
+            return;
+          }
+          const frameAction = frame && (frame.action || frame.type);
+          const frameKey = frame && typeof frame.apiKey === 'string' ? frame.apiKey.trim() : '';
+          if (frameAction !== 'auth' || !frameKey) {
+            closeUnauthorized();
+            return;
+          }
+          const ok = await authorizeConnection(frameKey);
+          if (ok && ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send(JSON.stringify({ action: 'auth_ok' }));
+            } catch (_) {}
+          }
           return;
         }
         if (isAuthorized) {
@@ -1585,6 +1635,10 @@ function setupHelixEngine(app, server) {
       });
 
       ws.on('close', () => {
+        if (authTimeout) {
+          clearTimeout(authTimeout);
+          authTimeout = null;
+        }
         authenticatedClients.delete(ws);
       });
 
@@ -1592,28 +1646,26 @@ function setupHelixEngine(app, server) {
         const reqUrl = new URL(req.url || '/helix/ws', 'http://localhost');
         const queryKey = reqUrl.searchParams.get('apiKey');
         const headerKey = req.headers['x-api-key'];
-        const candidateKey = queryKey || headerKey || '';
+        const candidateKey = String(queryKey || headerKey || '').trim();
 
-        const valid = await verifyApiKey(candidateKey);
-        authResolved = true;
-
-        if (!valid) {
-          pendingMessages.length = 0;
-          ws.close(4001, 'Unauthorized');
-          return;
-        }
-
-        isAuthorized = true;
-        authenticatedClients.add(ws);
-
-        while (pendingMessages.length > 0) {
-          const msg = pendingMessages.shift();
-          await dispatchWsAction(ws, msg, wsUserContext);
+        if (candidateKey) {
+          const ok = await authorizeConnection(candidateKey);
+          if (!ok) return;
+          while (pendingMessages.length > 0) {
+            const msg = pendingMessages.shift();
+            await dispatchWsAction(ws, msg, wsUserContext);
+          }
+        } else {
+          // Allow browser clients to authenticate via first frame without exposing apiKey in URL
+          authTimeout = setTimeout(() => {
+            if (!isAuthorized) {
+              closeUnauthorized();
+            }
+          }, 2000);
+          authTimeout.unref?.();
         }
       } catch (err) {
-        authResolved = true;
-        pendingMessages.length = 0;
-        ws.close(4001, 'Unauthorized');
+        closeUnauthorized();
       }
     });
   }
