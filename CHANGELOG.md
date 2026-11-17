@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.10] - 2026-11-17
+
+### Added & Fixed
+- **Helix WebSocket Auth Verification, Real-Time Voice State Broadcasts & Passive Speaking Monitoring (#128, #129, #130, #131)**:
+  - **Status Member Voice Enrichment (#129)**: Extended `getGuildMembers` via shared `serializeGuildMember` / `formatVoiceFlags` helpers in `backend/helixEngine.js` to return `inVoice`, `channelId`, `muted`, `selfMute`, `serverMute`, `deaf`, and `speaking` (backed by an in-memory `activeSpeakers` Set cleared on voice disconnect and teardown).
+  - **Real-Time `voice_state_update` Broadcasts (#130)**: Subscribed to Discord `voiceStateUpdate` events (and exposed `engine.handleVoiceStateUpdate`) to broadcast `voice_state_update` payloads over `/helix/ws` to authenticated clients while filtering out bot members and redundant no-op state updates.
+  - **Passive Speaking Observation vs. Active STT (#131)**: Decoupled speaking `start`/`end` WebSocket indicator tracking (`sessionId: null` outside active recording) from Opus/PCM/`@google-cloud/speech` STT pipelines, added `connectPassiveVoice`/`disconnectPassiveVoice` with `clientReady` and `POST /api/helix/config` auto-connect, reused matching voice connections on `session_start`, and preserved or restored configured passive monitoring cleanly on `session_end`.
+  - **Automated Tests**: Added `backend/test_ticket_128_ws_verify_key.js`, `backend/test_ticket_129_status_voice_flags.js`, `backend/test_ticket_130_voice_state_ws.js`, and `backend/test_ticket_131_passive_speaking.js`.
+
 ## [1.9.9] - 2026-11-14
 
 ### Fixed

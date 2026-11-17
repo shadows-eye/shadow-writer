@@ -190,9 +190,7 @@ async function runTests() {
       wsClient.once('error', reject);
     });
     wsClient.on('message', (raw) => {
-      let wsClient = null;
-
-  try {
+      try {
         wsMessages.push(JSON.parse(raw.toString()));
       } catch (e) {
         wsMessages.push(raw.toString());
@@ -457,6 +455,20 @@ async function runTests() {
     await waitForCondition(() =>
       wsMessages.find((m) => m.action === 'session_summary' && m.sessionId === 'sess-131-diff')
     );
+
+    // Passive monitoring on configured g-131/ch-131 must be restored cleanly after mismatched session ends
+    assert.strictEqual(joinVoiceChannelCallCount, 5, 'Configured passive voice connection must be restored on session_end');
+    const restoredConn = createdConnections[createdConnections.length - 1];
+    assert.strictEqual(restoredConn.guildId, 'g-131');
+    assert.strictEqual(restoredConn.channelId, 'ch-131');
+    wsMessages.length = 0;
+    const sttBeforeRestored = createSttStreamCallCount;
+    restoredConn.speakingEmitter.emit('start', 'd-2');
+    const restoredStart = await waitForCondition(() =>
+      wsMessages.find((m) => m.action === 'speaking_start' && m.discordId === 'd-2' && m.sessionId === null)
+    );
+    assert.ok(restoredStart, 'Restored passive connection must emit speaking_start with sessionId=null');
+    assert.strictEqual(createSttStreamCallCount, sttBeforeRestored, 'Restored passive connection must not open STT streams');
     console.log('✓ Test 6 passed!');
 
     wsClient.close();
