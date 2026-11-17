@@ -90,7 +90,7 @@ async function runTests() {
       ...overrides
     });
 
-    // 2. Join voice channel (channelId: null -> 'ch-1')
+    // 2. Join voice channel (channelId: null -> 'ch-1') without channel metadata -> channelName: null
     engine.handleVoiceStateUpdate(
       makeState({ channelId: null }),
       makeState({ channelId: 'ch-1' })
@@ -102,16 +102,22 @@ async function runTests() {
       discordId: 'user-1',
       inVoice: true,
       channelId: 'ch-1',
+      channelName: null,
       muted: false,
       selfMute: false,
       serverMute: false,
       deaf: false
     });
 
-    // 2b. Join voice channel with null oldState
+    // 2b. Join voice channel with null oldState and channel definition -> resolved channelName
     engine.handleVoiceStateUpdate(
       null,
-      makeState({ id: 'user-2', channelId: 'ch-2', member: { id: 'user-2', user: { id: 'user-2', bot: false } } })
+      makeState({
+        id: 'user-2',
+        channelId: 'ch-2',
+        channel: { id: 'ch-2', name: 'Run Table 2', type: 2 },
+        member: { id: 'user-2', user: { id: 'user-2', bot: false } }
+      })
     );
     const nullOldMsg = await waitForNextMessage(authMessages, 1);
     assert.deepStrictEqual(nullOldMsg, {
@@ -120,16 +126,24 @@ async function runTests() {
       discordId: 'user-2',
       inVoice: true,
       channelId: 'ch-2',
+      channelName: 'Run Table 2',
       muted: false,
       selfMute: false,
       serverMute: false,
       deaf: false
     });
 
-    // 3. Self-mute (selfMute: false -> true)
+    // 3. Self-mute (selfMute: false -> true) with guild channel cache -> resolved channelName
+    const guildChannelsCache = new Map([
+      ['ch-1', { id: 'ch-1', name: 'Run Table 1', type: 2 }]
+    ]);
     engine.handleVoiceStateUpdate(
       makeState({ channelId: 'ch-1', selfMute: false }),
-      makeState({ channelId: 'ch-1', selfMute: true })
+      makeState({
+        guild: { id: 'guild-1', channels: { cache: guildChannelsCache } },
+        channelId: 'ch-1',
+        selfMute: true
+      })
     );
     const selfMuteMsg = await waitForNextMessage(authMessages, 2);
     assert.deepStrictEqual(selfMuteMsg, {
@@ -138,6 +152,7 @@ async function runTests() {
       discordId: 'user-1',
       inVoice: true,
       channelId: 'ch-1',
+      channelName: 'Run Table 1',
       muted: true,
       selfMute: true,
       serverMute: false,
@@ -156,6 +171,7 @@ async function runTests() {
       discordId: 'user-1',
       inVoice: true,
       channelId: 'ch-1',
+      channelName: null,
       muted: true,
       selfMute: true,
       serverMute: true,
@@ -174,6 +190,7 @@ async function runTests() {
       discordId: 'user-1',
       inVoice: true,
       channelId: 'ch-1',
+      channelName: null,
       muted: true,
       selfMute: true,
       serverMute: true,
@@ -192,6 +209,7 @@ async function runTests() {
       discordId: 'user-1',
       inVoice: false,
       channelId: null,
+      channelName: null,
       muted: true,
       selfMute: true,
       serverMute: true,

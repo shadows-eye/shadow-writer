@@ -40,18 +40,6 @@ function normalizeVoiceState(state) {
   };
 }
 
-function formatVoiceFlags(voiceState) {
-  const norm = normalizeVoiceState(voiceState);
-  return {
-    inVoice: Boolean(norm.channelId),
-    channelId: norm.channelId,
-    muted: Boolean(norm.mute || norm.selfMute || norm.serverMute),
-    selfMute: norm.selfMute,
-    serverMute: norm.serverMute,
-    deaf: Boolean(norm.deaf || norm.selfDeaf || norm.serverDeaf)
-  };
-}
-
 function extractVoiceStateIds(oldState, newState) {
   const pick = (s, fn) => (s ? fn(s) : '');
   const guildId = pick(newState, s => (s.guild && s.guild.id) || s.guildId)
@@ -131,7 +119,6 @@ function setupHelixEngine(app, server) {
   let mockDiscordState = null;
   let activeSession = null;
   const activeSpeakers = new Set();
-  let passiveMonitoringTarget = null;
   const voiceConnectionState = {
     connection: null,
     guildId: '',
@@ -199,25 +186,10 @@ function setupHelixEngine(app, server) {
           GatewayIntentBits.GuildMembers
         ]
       });
-      discordClient.once('clientReady', async () => {
+      discordClient.once('clientReady', () => {
         discordReady = true;
         console.log(`[Helix] Discord bot logged in as ${discordClient.user ? discordClient.user.tag : 'unknown'}`);
         updateBotPresence('idle');
-        try {
-          if (!activeSession) {
-            const configuredFilter = {
-              guildId: { $exists: true, $ne: '' },
-              channelId: { $exists: true, $ne: '' }
-            };
-            const cfg = (await HelixConfig.findOne({ id: 'default', ...configuredFilter }).lean())
-              || (await HelixConfig.findOne(configuredFilter).sort({ updatedAt: -1 }).lean());
-            if (cfg && cfg.guildId && cfg.channelId) {
-              connectPassiveVoice({ guildId: cfg.guildId, channelId: cfg.channelId });
-            }
-          }
-        } catch (err) {
-          console.warn('[Helix] Failed to auto-connect passive voice on clientReady:', err.message);
-        }
       });
       discordClient.on('voiceStateUpdate', (oldState, newState) => handleVoiceStateUpdate(oldState, newState));
       discordClient.on('error', (err) => {
@@ -348,12 +320,80 @@ function setupHelixEngine(app, server) {
   const guildMemberFetchTimestamps = new Map();
   const GUILD_MEMBER_FETCH_TTL_MS = 60 * 1000;
 
-  function serializeGuildMember(member) {
+  function findVoiceChannelInCollection(channels, targetId) {
+    if (!channels || !targetId) return null;
+    const idStr = String(targetId);
+    if (channels.cache) {
+      if (typeof channels.cache.get === 'function') {
+        return channels.cache.get(idStr) || null;
+      }
+      if (Array.isArray(channels.cache)) {
+        return channels.cache.find((ch) => ch && String(ch.id) === idStr) || null;
+      }
+    }
+    if (typeof channels.get === 'function') {
+      return channels.get(idStr) || null;
+    }
+    if (Array.isArray(channels)) {
+      return channels.find((ch) => ch && String(ch.id) === idStr) || null;
+    }
+    return null;
+  }
+
+  function resolveVoiceChannelName(voiceState, channelId, guildId = '') {
+    if (!channelId) return null;
+    const targetChannelId = String(channelId);
+
+    const directChannel = voiceState && voiceState.channel;
+    if (
+      directChannel &&
+      (!directChannel.id || String(directChannel.id) === targetChannelId) &&
+      (directChannel.type === undefined || VOICE_CHANNEL_TYPES.has(directChannel.type)) &&
+      directChannel.name
+    ) {
+      return String(directChannel.name);
+    }
+
+    const guildChannels = voiceState && voiceState.guild && voiceState.guild.channels;
+    const foundInGuild = findVoiceChannelInCollection(guildChannels, targetChannelId);
+    if (foundInGuild && VOICE_CHANNEL_TYPES.has(foundInGuild.type) && foundInGuild.name) {
+      return String(foundInGuild.name);
+    }
+
+    const resolvedGuildId = guildId
+      || (voiceState && voiceState.guild && voiceState.guild.id)
+      || (voiceState && voiceState.guildId)
+      || '';
+    if (resolvedGuildId) {
+      const voiceChannels = getVoiceChannelsForGuild(resolvedGuildId);
+      const matched = voiceChannels.find((ch) => String(ch.id) === targetChannelId);
+      if (matched && matched.name) {
+        return String(matched.name);
+      }
+    }
+
+    return null;
+  }
+
+  function formatVoiceFlags(voiceState, guildId = '') {
+    const norm = normalizeVoiceState(voiceState);
+    return {
+      inVoice: Boolean(norm.channelId),
+      channelId: norm.channelId,
+      channelName: resolveVoiceChannelName(voiceState, norm.channelId, guildId),
+      muted: Boolean(norm.mute || norm.selfMute || norm.serverMute),
+      selfMute: norm.selfMute,
+      serverMute: norm.serverMute,
+      deaf: Boolean(norm.deaf || norm.selfDeaf || norm.serverDeaf)
+    };
+  }
+
+  function serializeGuildMember(member, guildId = '') {
     const user = (member && member.user) || {};
     const discordId = String((member && member.id) || '');
     const name = (member && member.displayName) || user.username || (member && member.name) || discordId;
     const tag = user.tag || user.username || (member && member.tag) || (member && member.displayName) || (member && member.name) || discordId;
-    const voiceFlags = formatVoiceFlags(member && member.voice);
+    const voiceFlags = formatVoiceFlags(member && member.voice, guildId);
 
     return {
       id: discordId,
@@ -381,7 +421,7 @@ function setupHelixEngine(app, server) {
       return rawMembers
         .filter(m => Boolean(m) && !isBotMember(m))
         .filter(m => !targetRoleId || memberHasRole(m, targetRoleId))
-        .map(serializeGuildMember);
+        .map(m => serializeGuildMember(m, guildId));
     }
 
     if (discordClient && discordReady && discordClient.guilds && discordClient.guilds.cache) {
@@ -410,7 +450,7 @@ function setupHelixEngine(app, server) {
         return Array.from(memberCollection.values())
           .filter(m => Boolean(m) && !isBotMember(m))
           .filter(m => !targetRoleId || memberHasRole(m, targetRoleId))
-          .map(serializeGuildMember);
+          .map(m => serializeGuildMember(m, guildId));
       }
     }
     return [];
@@ -625,18 +665,6 @@ function setupHelixEngine(app, server) {
         updatedAt: updated.updatedAt ? new Date(updated.updatedAt).toISOString() : updatedAt.toISOString()
       };
 
-      if (!activeSession) {
-        if (nextGuildId && nextChannelId) {
-          connectPassiveVoice({ guildId: nextGuildId, channelId: nextChannelId });
-        } else {
-          disconnectPassiveVoice();
-        }
-      } else if (voiceDeps.joinVoiceChannel || (discordClient && discordReady)) {
-        passiveMonitoringTarget = (nextGuildId && nextChannelId)
-          ? { guildId: nextGuildId, channelId: nextChannelId }
-          : null;
-      }
-
       res.json({
         success: true,
         ...formattedConfig,
@@ -796,7 +824,7 @@ function setupHelixEngine(app, server) {
       action: 'voice_state_update',
       guildId,
       discordId,
-      ...formatVoiceFlags(next)
+      ...formatVoiceFlags(newState, guildId)
     });
   }
 
@@ -1060,24 +1088,21 @@ function setupHelixEngine(app, server) {
     const receiver = voiceConnection.receiver;
 
     const onSpeakingStart = (userId) => {
-      const discordId = String(userId);
-      activeSpeakers.add(discordId);
       const session = activeSession;
-      const playerInfo = session && session.playerMap ? (session.playerMap.get(discordId) || null) : null;
-      const foundryId = playerInfo ? playerInfo.foundryId : null;
-
-      // Immediately emit speaking_start over WebSocket (sessionId/foundryId are null in passive mode)
-      broadcastWs({
-        action: 'speaking_start',
-        sessionId: session ? session.sessionId : null,
-        discordId,
-        foundryId
-      });
-
-      // Only open Opus/PCM/STT pipelines when an active recording session is running
       if (!session) {
         return;
       }
+      const discordId = String(userId);
+      activeSpeakers.add(discordId);
+      const playerInfo = session.playerMap ? (session.playerMap.get(discordId) || null) : null;
+      const foundryId = playerInfo ? playerInfo.foundryId : null;
+
+      broadcastWs({
+        action: 'speaking_start',
+        sessionId: session.sessionId,
+        discordId,
+        foundryId
+      });
 
       startUserSttPipeline(session, receiver, discordId, playerInfo);
     };
@@ -1086,13 +1111,15 @@ function setupHelixEngine(app, server) {
       const discordId = String(userId);
       activeSpeakers.delete(discordId);
       const session = activeSession;
-      const playerInfo = session && session.playerMap ? (session.playerMap.get(discordId) || null) : null;
+      if (!session) {
+        return;
+      }
+      const playerInfo = session.playerMap ? (session.playerMap.get(discordId) || null) : null;
       const foundryId = playerInfo ? playerInfo.foundryId : null;
 
-      // Immediately emit speaking_stop over WebSocket
       broadcastWs({
         action: 'speaking_stop',
-        sessionId: session ? session.sessionId : null,
+        sessionId: session.sessionId,
         discordId,
         foundryId
       });
@@ -1171,39 +1198,6 @@ function setupHelixEngine(app, server) {
     voiceConnectionState.detachLifecycleListeners = attachVoiceConnectionLifecycle(conn);
     voiceConnectionState.detachSpeakingListeners = attachVoiceReceiver(conn);
     return conn;
-  }
-
-  function connectPassiveVoice({ guildId, channelId } = {}) {
-    const cleanGuildId = String(guildId || '').trim();
-    const cleanChannelId = String(channelId || '').trim();
-    if (!cleanGuildId || !cleanChannelId) {
-      return null;
-    }
-    if (!voiceDeps.joinVoiceChannel && !(discordClient && discordReady)) {
-      return null;
-    }
-    passiveMonitoringTarget = {
-      guildId: cleanGuildId,
-      channelId: cleanChannelId
-    };
-    if (activeSession) {
-      if (
-        voiceConnectionState.connection &&
-        voiceConnectionState.guildId === cleanGuildId &&
-        voiceConnectionState.channelId === cleanChannelId
-      ) {
-        return voiceConnectionState.connection;
-      }
-      return null;
-    }
-    return ensureVoiceConnection(cleanGuildId, cleanChannelId, 'passive');
-  }
-
-  function disconnectPassiveVoice() {
-    passiveMonitoringTarget = null;
-    if (!activeSession && voiceConnectionState.connection) {
-      destroyVoiceConnection();
-    }
   }
 
   async function handleSessionStart(payload) {
@@ -1380,33 +1374,20 @@ function setupHelixEngine(app, server) {
         cleanupUserStream(session, dId);
       }
 
-      const keepPassive = Boolean(
-        passiveMonitoringTarget &&
-        session.guildId &&
-        session.channelId &&
-        passiveMonitoringTarget.guildId === session.guildId &&
-        passiveMonitoringTarget.channelId === session.channelId
-      );
-
-      if (!keepPassive) {
-        const previousStateConn = voiceConnectionState.connection;
-        destroyVoiceConnection();
-        if (
-          session.voiceConnection &&
-          session.voiceConnection !== previousStateConn &&
-          typeof session.voiceConnection.destroy === 'function'
-        ) {
-          try {
-            session.voiceConnection.destroy();
-          } catch (err) {
-            console.warn('[Helix] Error destroying voice connection:', err.message);
-          }
-        }
-        activeSpeakers.clear();
-        if (passiveMonitoringTarget && passiveMonitoringTarget.guildId && passiveMonitoringTarget.channelId) {
-          ensureVoiceConnection(passiveMonitoringTarget.guildId, passiveMonitoringTarget.channelId, 'passive');
+      const previousStateConn = voiceConnectionState.connection;
+      destroyVoiceConnection();
+      if (
+        session.voiceConnection &&
+        session.voiceConnection !== previousStateConn &&
+        typeof session.voiceConnection.destroy === 'function'
+      ) {
+        try {
+          session.voiceConnection.destroy();
+        } catch (err) {
+          console.warn('[Helix] Error destroying voice connection:', err.message);
         }
       }
+      activeSpeakers.clear();
       session.endedAt = endedAt;
       await queueTranscriptSave(session);
       const rendered = renderTranscriptFromEntries(session.entries);
@@ -1680,8 +1661,6 @@ function setupHelixEngine(app, server) {
         ...deps
       };
     },
-    connectPassiveVoice,
-    disconnectPassiveVoice,
     getActiveSession() {
       return activeSession;
     },
